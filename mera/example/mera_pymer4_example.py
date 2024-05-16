@@ -51,7 +51,10 @@ res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
 # Run MER
 event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
-    res_df, list(ims), "event_id", "stat_id",
+    res_df,
+    list(ims),
+    "event_id",
+    "stat_id",
 )
 
 # Save the results
@@ -59,5 +62,3 @@ event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
 site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
 bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
-
-

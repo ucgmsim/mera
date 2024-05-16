@@ -112,7 +112,9 @@ def run_mera(
 
     # Compute total sigma
     bias_std_df["sigma"] = (
-        bias_std_df["tau"] ** 2 + bias_std_df["phi_S2S"] ** 2 + bias_std_df["phi_w"] ** 2
-    ) ** (1/2)
+        bias_std_df["tau"] ** 2
+        + bias_std_df["phi_S2S"] ** 2
+        + bias_std_df["phi_w"] ** 2
+    ) ** (1 / 2)
 
     return event_res_df, site_res_df, rem_res_df, bias_std_df

@@ -4,14 +4,12 @@ This package contains two different implementations for running mixed-effects re
 
 The only difference between the two implementations is the underlying packages they use.
 
----- 
-
+----
 ### Installation
 
-Navigate to the `Ancillary-Tools` directory and run `pip install -e ./mera`
+Install dependencies (see requirements.txt)
 
-Note: Dependencies have to be installed manually depending on which implementation is used
-
+Run `pip install git+https://github.com/ucgmsim/mera.git`
 -----
 
 ### Implementation - statsmodel 

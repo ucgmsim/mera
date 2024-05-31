@@ -15,7 +15,7 @@ def run_mera(
     compute_site_term: bool = True,
     mask: pd.DataFrame = None,
     verbose: bool = True,
-    min_num_group_warn: int = 3
+    min_num_group_warn: int = 4
 ):
     """
     Runs mixed effects regression analysis for the given
@@ -99,38 +99,26 @@ def run_mera(
             else residual_df[cur_columns].loc[mask[cur_im]]
         )
 
-        def check_grouped_counts(df, group_col, min_num_group_warn):
-            # Group by group_col and count the number of entries for each group
-            group_counts = df.groupby(group_col).size()
+        ###########################################################
+        ## Code to warn about insufficient_records
 
-            # Find the groups where the count is less than or equal to min_num_group_warn
-            small_groups = group_counts[group_counts <= min_num_group_warn]
+        # Only print warnings for the first IM in the loop
+        if cur_ix == 0:
 
-            # Raise a warning for each group with count less than or equal to 3
-            for group_id in small_groups.index:
-                #warnings.warn(f"Station {stat_id} has only {small_groups[stat_id]} entries (minimum is {min_num_group_warn})")
-                print(f"Warning: {group_id} has only {small_groups[group_id]} entries (minimum is {min_num_group_warn})")
+            def insufficient_records_warning(df, group_col, min_num_group_warn):
+                count = df.groupby(group_col).count().iloc[:, 0]
+                mask = count < min_num_group_warn
 
-        check_grouped_counts(cur_residual_df, 'event_id', min_num_group_warn)
-        #check_grouped_counts(cur_residual_df, 'stat_id', min_num_group_warn)
+                warn_str_lines = [
+                    f'{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records (recommended minimum is {min_num_group_warn})'
+                    for x in range(len(count.loc[mask]))]
+                for line in warn_str_lines:
+                    print(f'Warning: {line}')
 
-        # # Group by stat_id and count the number of entries for each group
-        # stat_counts = cur_residual_df.groupby('stat_id').size()
-        #
-        # # Find the groups where the count is less than or equal to 3
-        # small_stat_groups = stat_counts[stat_counts <= min_num_group_warn]
-        #
-        # # Raise a warning for each group with count less than or equal to 3
-        # for stat_id in small_stat_groups.index:
-        #     #warnings.warn(f"Station {stat_id} has only {small_groups[stat_id]} entries (minimum is {min_num_group_warn})")
-        #     print(f"Warning: station {stat_id} has only {small_stat_groups[stat_id]} entries (minimum is {min_num_group_warn})")
+                return mask
 
-
-        event_counts = cur_residual_df.groupby('event_id').size()
-        # Group by event_id and count the number of entries for each group
-        ################
-
-
+            station_mask = insufficient_records_warning(cur_residual_df, 'stat_id', min_num_group_warn)
+            event_mask = insufficient_records_warning(cur_residual_df, 'event_id', min_num_group_warn)
 
         # Check for nans
         if cur_residual_df[cur_im].isna().sum() > 0:

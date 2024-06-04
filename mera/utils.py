@@ -1,51 +1,51 @@
 import pandas as pd
-import numpy as np
 
-df = pd.read_csv('/home/arr65/src/Andrew_test_code/res_df.csv')
-
-df_original = df.copy()
+residual_df = pd.read_csv('/home/arr65/src/Andrew_test_code/res_df.csv')
+final_mask2D = residual_df.notnull()
 
 # Define the minimum number of records
 min_num_records = 4
 
-# Create a copy of the original DataFrame to compare with the masked DataFrame
-df_prev = df.copy()
+# Only need to consider one column as all columns in final_mask2D will be the same
+final_mask1D = final_mask2D.iloc[:,0]
 
-# Initialize the counter
+# Iterate until the DataFrame before and after the masking operation are the same
 iteration_counter = 0
-
-# Initialize the final mask with all True values (same size as the original DataFrame)
-final_mask = pd.Series(np.ones(df.shape[0], dtype=bool))
-
+# Create a copy of the original DataFrame to compare with the masked DataFrame.
+residual_df_prev = residual_df.copy()
 while True:
-    # Increment the counter
     iteration_counter += 1
 
-    # Create masks for 'stat_id' and 'event_id'
-    mask_stat_id = df.groupby('stat_id')['stat_id'].transform('count') >= min_num_records
-    mask_event_id = df.groupby('event_id')['event_id'].transform('count') >= min_num_records
+    # Use transform on the groupby object to create a mask of the same length as the original DataFrame.
+    # Then use iloc to get the first column as all columns are the same so we only need one.
+    mask_stat_id = residual_df.groupby('stat_id').transform('count').iloc[:,0] >= min_num_records
+    mask_event_id = residual_df.groupby('event_id').transform('count').iloc[:,0] >= min_num_records
 
-    # Combine the masks
+    # Combine the station and event masks
     mask = mask_stat_id & mask_event_id
 
-    # Update the final mask
-    final_mask[df.index] = mask
+    # Update the final mask. final_mask1D and mask may have different lengths if several iterations are required
+    # so we need to use the index of the original DataFrame to update the final mask
+    final_mask1D[residual_df.index] = mask
 
-    # Apply the mask to the DataFrame
-    df = df[mask]
+    residual_df = residual_df[mask]
 
     # If the DataFrame before and after the masking operation are the same, break the loop
-    if df.equals(df_prev):
+    if residual_df.equals(residual_df_prev):
         break
 
-    # Update df_prev for the next iteration
-    df_prev = df.copy()
+    # Update residual_df_prev for the next iteration
+    residual_df_prev = residual_df.copy()
+
+# Copy final_mask1D to all columns in final_mask2D
+for col in final_mask2D.columns:
+    final_mask2D[col] = final_mask1D
 
 print(f'The number of iterations is: {iteration_counter}')
 
 # Calculate the number of rows removed
-num_rows_removed = df_original.shape[0] - df.shape[0]
+num_rows_removed = final_mask2D.shape[0] - residual_df.shape[0]
 
 # Print the number of rows removed
-print(f'The number of rows removed is: {num_rows_removed}')
+print(f'Removed {num_rows_removed} records (required {iteration_counter} iterations).')
 

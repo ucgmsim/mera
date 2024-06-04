@@ -1,5 +1,4 @@
 from typing import List
-import warnings
 
 import pandas as pd
 import numpy as np
@@ -15,7 +14,6 @@ def run_mera(
     compute_site_term: bool = True,
     mask: pd.DataFrame = None,
     verbose: bool = True,
-    min_num_group_warn: int = 4
 ):
     """
     Runs mixed effects regression analysis for the given
@@ -98,27 +96,6 @@ def run_mera(
             if mask is None
             else residual_df[cur_columns].loc[mask[cur_im]]
         )
-
-        ###########################################################
-        ## Code to warn about insufficient_records
-
-        # Only print warnings for the first IM in the loop
-        if cur_ix == 0:
-
-            def insufficient_records_warning(df, group_col, min_num_group_warn):
-                count = df.groupby(group_col).count().iloc[:, 0]
-                mask = count < min_num_group_warn
-
-                warn_str_lines = [
-                    f'{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records (recommended minimum is {min_num_group_warn})'
-                    for x in range(len(count.loc[mask]))]
-                for line in warn_str_lines:
-                    print(f'Warning: {line}')
-
-                return mask
-
-            station_mask = insufficient_records_warning(cur_residual_df, 'stat_id', min_num_group_warn)
-            event_mask = insufficient_records_warning(cur_residual_df, 'event_id', min_num_group_warn)
 
         # Check for nans
         if cur_residual_df[cur_im].isna().sum() > 0:

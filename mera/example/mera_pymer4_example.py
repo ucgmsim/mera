@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from mera.mera_pymer4 import run_mera
+from mera.utils import mask_too_few_records
 
 # Load the data
 data_dir = Path(__file__).parent / "resources"
@@ -49,12 +50,19 @@ res_df["stat_id"] = obs_df.stat_id
 res_df["event_id"] = np.char.add("event_", res_df["event_id"].values.astype(str))
 res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
+
+# Optional: Mask out records if there are too few records per station or event to be useful
+mask = mask_too_few_records(
+    res_df, min_num_records_per_event=4, min_num_records_per_station=4, verbose=True
+)
+
 # Run MER
 event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
     res_df,
     list(ims),
     "event_id",
     "stat_id",
+    mask=mask,
 )
 
 # Save the results

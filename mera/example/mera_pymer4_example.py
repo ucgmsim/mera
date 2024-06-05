@@ -51,9 +51,14 @@ res_df["event_id"] = np.char.add("event_", res_df["event_id"].values.astype(str)
 res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
 
-# Optional: Mask out records if there are too few records per station or event to be useful
+# Optional: Mask out records if there are too few records per station or per event to be useful
 mask = mask_too_few_records(
-    res_df, min_num_records_per_event=4, min_num_records_per_station=4, verbose=True
+    res_df,
+    column_name1="event_id",
+    column_name2="stat_id",
+    min_num_records_per_column1=4,
+    min_num_records_per_column2=4,
+    verbose=True,
 )
 
 # Run MER

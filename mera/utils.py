@@ -12,7 +12,8 @@ def mask_too_few_records(
     min_num_records_per_station: Optional[int] = 3,
 ) -> pd.DataFrame:
     """
-    Mask records if there are too few records per event or per station to be useful.
+    Creates a boolean mask that removes records without sufficient records per station/event.
+    Note: This is done independently per IM.
 
     Parameters
     ----------
@@ -34,9 +35,8 @@ def mask_too_few_records(
 
     Returns
     -------
-    final_mask2D : pd.DataFrame
-        The final version of the mask (after iterating) in the form of a 2D pd.DataFrame with the same shape as
-        residual_df. True values indicate records to keep.
+    mask: pd.DataFrame
+        Mask dataframe with the same shape as the given residual dataframe.
     """
 
     # As we are masking records based on two related properties (event_id and station_id), we need to iteratively
@@ -69,13 +69,13 @@ def mask_too_few_records(
         # Update residual_df_prev for the next iteration
         residual_df_prev = residual_df.copy()
 
-    return_mask = residual_df.notnull()
+    mask = residual_df.notnull()
 
-    num_masked_records = return_mask[ims].size - np.sum(np.sum(return_mask[ims]))
+    num_masked_records = mask[ims].size - np.sum(np.sum(mask[ims]))
 
     print(
         f"Masked {100*num_masked_records/residual_df.size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
 
-    return return_mask
+    return mask

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from mera.mera_pymer4 import run_mera
-from mera.utils import mask_too_few_records
+from mera import utils
 
 # Load the data
 data_dir = Path(__file__).parent / "resources"
@@ -52,7 +52,7 @@ res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
 
 # Optional: Mask out records if there are too few records per station or per event to be useful
-mask = mask_too_few_records(
+mask = utils.mask_too_few_records(
     res_df,
     ims,
     event_id="event_id",

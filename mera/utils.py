@@ -61,9 +61,9 @@ def mask_too_few_records(
             < min_num_records_per_site
         )
 
-        num_false_in_previous_mask = (mask[ims] == False).sum().sum()
+        num_false_in_previous_mask = (~mask).sum().sum()
         mask[drop_mask] = False
-        num_false_in_mask = (mask[ims] == False).sum().sum()
+        num_false_in_mask = (~mask).sum().sum()
 
         # If the number of False values in the mask does not change, break the loop
         if num_false_in_mask == num_false_in_previous_mask:
@@ -73,5 +73,5 @@ def mask_too_few_records(
         f"Masked {100*num_false_in_mask/mask[ims].size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
-
+    print()
     return mask

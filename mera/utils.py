@@ -1,14 +1,13 @@
-from typing import Optional
 import pandas as pd
 
 
 def mask_too_few_records(
     residual_df: pd.DataFrame,
-    ims: list,
-    event_cname: Optional[str] = "event_id",
-    site_cname: Optional[str] = "stat_id",
-    min_num_records_per_event: Optional[int] = 3,
-    min_num_records_per_site: Optional[int] = 3,
+    ims: list[str],
+    event_cname: str = "event_id",
+    site_cname: str = "stat_id",
+    min_num_records_per_event: int = 3,
+    min_num_records_per_site: int = 3,
 ) -> pd.DataFrame:
     """
     Creates a boolean mask that removes records without sufficient records per station/event.
@@ -24,9 +23,9 @@ def mask_too_few_records(
         IMs for which to run to mixed effects
         regression analysis.
         Note: Has to be a list, can't be a numpy array!
-    event_cname: string
+    event_cname: string, default = "event_id"
         Name of the column that contains the event ids.
-    site_cname: string
+    site_cname: string, default = "stat_id"
         Name of the column that contains the site ids.
     min_num_records_per_event : int, default = 3
         The minimum number of records per event required to keep the records.
@@ -74,7 +73,5 @@ def mask_too_few_records(
         f"Masked {100*num_false_in_mask/mask[ims].size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
-
-    print("bp")
 
     return mask

@@ -73,5 +73,5 @@ def mask_too_few_records(
         f"Masked {100*num_false_in_mask/mask[ims].size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
-    print()
+
     return mask

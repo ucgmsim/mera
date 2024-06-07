@@ -1,15 +1,14 @@
 from typing import Optional
 import pandas as pd
-import numpy as np
 
 
 def mask_too_few_records(
     residual_df: pd.DataFrame,
     ims: list,
-    event_id: Optional[str] = "event_id",
-    stat_id: Optional[str] = "stat_id",
+    event_cname: Optional[str] = "event_id",
+    site_cname: Optional[str] = "stat_id",
     min_num_records_per_event: Optional[int] = 3,
-    min_num_records_per_station: Optional[int] = 3,
+    min_num_records_per_site: Optional[int] = 3,
 ) -> pd.DataFrame:
     """
     Creates a boolean mask that removes records without sufficient records per station/event.
@@ -17,65 +16,65 @@ def mask_too_few_records(
 
     Parameters
     ----------
-    residual_df: dataframe
-        Residual dataframe, has to contain all
+    residual_df: DataFrame
+        Residual DataFrame, has to contain all
         specified IMs (as columns) along with
-         columns for event and site id
+         columns for event and site id.
     ims: list of strings
         IMs for which to run to mixed effects
         regression analysis.
-    event_id : str, default = 'event_id'
-        The first column to consider. The default value is 'event_id', which contains the event ids.
-    stat_id : str, default = 'stat_id'
-        The second column to consider. The default value is 'stat_id', which contains the station ids.
+        Note: Has to be a list, can't be a numpy array!
+    event_cname: string
+        Name of the column that contains the event ids.
+    site_cname: string
+        Name of the column that contains the site ids.
     min_num_records_per_event : int, default = 3
-        The minimum number of records required in `event_id` to keep the records.
-    min_num_records_per_station : int, default = 3
-        The minimum number of records required in `stat_id` to keep the records.
+        The minimum number of records per event required to keep the records.
+    min_num_records_per_site : int, default = 3
+        The minimum number of records per site required to keep the records.
 
     Returns
     -------
     mask: pd.DataFrame
-        Mask dataframe with the same shape as the given residual dataframe.
+        Mask DataFrame with the same shape as the given residual DataFrame.
     """
 
-    # As we are masking records based on two related properties (event_id and station_id), we need to iteratively
-    # construct the mask. For example, if on the first pass, we mask out all records associated with a particular event_id,
-    # there may then be too few remaining records associated with a stat_id, so they need to be masked out too.
-    # Therefore, we iterate until the mask is not changed by an additional iteration.
+    # To mask records based on the number of records per station or event, an iterative method is needed.
+    # For example, if all records of a particular event are masked, there may then be an insufficient
+    # number of records from an affected site, so they need to be masked out too.
+    # Therefore, this code iterates until the mask is not changed by an additional iteration.
 
     iteration_counter = 0
-    residual_df_prev = residual_df.copy()
 
-    while True:
-        iteration_counter += 1
-
-        # Use transform on the groupby object to create a mask of the same length as the original DataFrame.
-        drop_mask = (
-            residual_df.groupby(event_id).transform("count")[ims]
-            < min_num_records_per_event
-        ) | (
-            residual_df.groupby(stat_id).transform("count")[ims]
-            < min_num_records_per_station
-        )
-
-        # Update residual_df by setting masked records to np.nan
-        residual_df[drop_mask] = np.nan
-
-        # If residual_df is the same before and after the masking operation, break the loop
-        if residual_df.equals(residual_df_prev):
-            break
-
-        # Update residual_df_prev for the next iteration
-        residual_df_prev = residual_df.copy()
-
+    # Initialize the mask with all values = True
     mask = residual_df.notnull()
 
-    num_masked_records = mask[ims].size - np.sum(np.sum(mask[ims]))
+    while True:
+
+        iteration_counter += 1
+
+        # Use transform on the groupby object to create a mask of the same shape as the original DataFrame.
+        drop_mask = (
+            residual_df[mask].groupby(event_cname).transform("count")[ims]
+            < min_num_records_per_event
+        ) | (
+            residual_df[mask].groupby(site_cname).transform("count")[ims]
+            < min_num_records_per_site
+        )
+
+        num_false_in_previous_mask = (mask[ims] == False).sum().sum()
+        mask[drop_mask] = False
+        num_false_in_mask = (mask[ims] == False).sum().sum()
+
+        # If the number of False values in the mask does not change, break the loop
+        if num_false_in_mask == num_false_in_previous_mask:
+            break
 
     print(
-        f"Masked {100*num_masked_records/residual_df.size:.2f}% of the records "
+        f"Masked {100*num_false_in_mask/mask[ims].size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
+
+    print("bp")
 
     return mask

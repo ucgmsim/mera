@@ -57,8 +57,8 @@ mask = utils.mask_too_few_records(
     ims,
     event_cname="event_id",
     site_cname="stat_id",
-    min_num_records_per_event=4,
-    min_num_records_per_site=4,
+    min_num_records_per_event=3,
+    min_num_records_per_site=3,
 )
 
 # Run MER
@@ -68,6 +68,10 @@ event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
     "event_id",
     "stat_id",
     mask=mask,
+    verbose=True,
+    verbose_warnings=True,
+    min_num_records_per_event=3,
+    min_num_records_per_site=3,
 )
 
 # Save the results

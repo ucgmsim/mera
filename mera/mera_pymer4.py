@@ -3,6 +3,7 @@ from typing import List
 import pandas as pd
 import numpy as np
 from pymer4.models import Lmer
+from mera import utils
 
 
 def run_mera(
@@ -14,6 +15,9 @@ def run_mera(
     compute_site_term: bool = True,
     mask: pd.DataFrame = None,
     verbose: bool = True,
+    verbose_warnings: bool = True,
+    min_num_records_per_event: int = 3,
+    min_num_records_per_site: int = 3,
 ):
     """
     Runs mixed effects regression analysis for the given
@@ -50,6 +54,10 @@ def run_mera(
         for the lmer model. If None then all values are used.
     verbose: bool
         If true then prints the progress of the analysis
+    min_num_records_per_event : int, default = 3
+        The minimum number of records per event required to keep the records.
+    min_num_records_per_site : int, default = 3
+        The minimum number of records per site required to keep the records.
 
     Returns
     -------
@@ -84,6 +92,11 @@ def run_mera(
             index=np.unique(residual_df[site_cname].values.astype(str)), columns=ims
         )
         random_effects_columns.append(site_cname)
+
+    # A dictionary to store warnings until they are printed at the end.
+    warning_str_per_im = {}
+    for im in ims:
+        warning_str_per_im[im] = {"stat_id": [], "event_id": []}
 
     for cur_ix, cur_im in enumerate(ims):
         if verbose:
@@ -158,6 +171,44 @@ def run_mera(
             ]
         else:
             print("WARNING: No data for IM, skipping...")
+
+        if verbose_warnings:
+            # Store the warning strings to print at the end
+            warning_str_per_im[cur_im]["stat_id"].extend(
+                utils.generate_insufficient_records_warning_str(
+                    cur_residual_df, "stat_id", min_num_records_per_site
+                )
+            )
+
+            warning_str_per_im[cur_im]["event_id"].extend(
+                utils.generate_insufficient_records_warning_str(
+                    cur_residual_df, "event_id", min_num_records_per_event
+                )
+            )
+
+    if verbose_warnings:
+        AnyWarnings = False
+
+        # Check if there are any warnings
+        for im in ims:
+            if (
+                len(warning_str_per_im[im]["stat_id"]) > 0
+                or len(warning_str_per_im[im]["event_id"]) > 0
+            ):
+                AnyWarnings = True
+                break
+
+        if AnyWarnings:
+            # Print the warnings about records with insufficient number of sites or events
+            print("Warnings about records with insufficient number of sites or events:")
+            for im in ims:
+                print(f"IM: {im}")
+                print("For stat_id:")
+                for x in range(len(warning_str_per_im[im]["stat_id"])):
+                    print(f"Warning for {im}: {warning_str_per_im[im]['stat_id'][x]}")
+                print("For event_id:")
+                for x in range(len(warning_str_per_im[im]["event_id"])):
+                    print(f"Warning for {im}: {warning_str_per_im[im]['event_id'][x]}")
 
     # Compute total sigma and return
     if compute_site_term:

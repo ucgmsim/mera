@@ -1,6 +1,41 @@
 import pandas as pd
 
 
+def generate_insufficient_records_warning_str(
+    residual_df_per_im: pd.DataFrame, group_col: str, min_num_group_warn: int
+) -> list[str]:
+    """
+    Generates a warning string for records with an insufficient
+    number of records per site or per event.
+
+    Parameters
+    ----------
+    residual_df_per_im: pd.DataFrame
+        The residual DataFrame for a single IM.
+    group_col: str
+        The column name that contains the record ids to check
+        (either event or site ids).
+    min_num_group_warn: int
+           The minimum number of records per site or event required
+           to not trigger a warning.
+    Returns
+    -------
+    warn_str_lines: list of strings
+        A list of warning strings for records with an insufficient
+        number of records per site or per event.
+
+    """
+    count = residual_df_per_im.groupby(group_col).count().iloc[:, 0]
+    mask = count < min_num_group_warn
+
+    warn_str_lines = [
+        f"{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records (recommended minimum is {min_num_group_warn})"
+        for x in range(len(count.loc[mask]))
+    ]
+
+    return warn_str_lines
+
+
 def mask_too_few_records(
     residual_df: pd.DataFrame,
     ims: list[str],

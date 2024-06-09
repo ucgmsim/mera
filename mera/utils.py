@@ -29,7 +29,8 @@ def generate_insufficient_records_warning_str(
     mask = count < min_num_group_warn
 
     warn_str_lines = [
-        f"{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records (recommended minimum is {min_num_group_warn})"
+        f"{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records "
+        f"(recommended minimum is {min_num_group_warn})"
         for x in range(len(count.loc[mask]))
     ]
 

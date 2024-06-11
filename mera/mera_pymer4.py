@@ -66,6 +66,7 @@ def run_mera(
         between-site sigma (phi_S2S) (only when compute_site_term is True),
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
+        Note: The bias column will be nan if assume_biased is False
     """
     # Result dataframes
     event_res_df = pd.DataFrame(
@@ -75,7 +76,10 @@ def run_mera(
     )
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
     bias_std_df = pd.DataFrame(
-        index=ims, columns=["bias", "tau", "phi_S2S", "phi_w", "sigma"], dtype=float
+        index=ims,
+        columns=["bias", "tau", "phi_S2S", "phi_w", "sigma"],
+        dtype=float,
+        data=np.full((len(ims), 5), np.nan),
     )
 
     random_effects_columns = [event_cname]
@@ -149,7 +153,8 @@ def run_mera(
                 rem_res_df.loc[mask[cur_im], cur_im] = cur_model.residuals
 
             # Get bias
-            bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
+            if assume_biased:
+                bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
 
             # Get standard deviations
             bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]

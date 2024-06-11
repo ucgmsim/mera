@@ -91,7 +91,6 @@ def mask_too_few_records(
 
     iteration_counter = 0
 
-    num_true_in_initial_mask = mask[ims].values.sum()
     num_false_in_initial_mask = (~mask[ims]).values.sum()
     num_false_in_previous_mask = num_false_in_initial_mask
 
@@ -130,14 +129,15 @@ def mask_too_few_records(
 
     if num_false_in_initial_mask == 0:
         print(
-            f"Masked {100*num_false_in_current_mask/mask[ims].size:.2f}% of the records. "
+            f"Masked {num_false_in_current_mask} records "
+            f"({100*num_false_in_current_mask/mask[ims].size:.2f}%). "
             f"Masking required {iteration_counter} iterations."
         )
 
     if num_false_in_initial_mask > 0:
         print(
             f"Masked an additional {num_false_in_current_mask-num_false_in_initial_mask} records "
-            f"({100*(num_false_in_current_mask-num_false_in_initial_mask)/(num_true_in_initial_mask+num_false_in_initial_mask):.2f}%). "
+            f"({100*(num_false_in_current_mask-num_false_in_initial_mask)/mask[ims].size:.2f}%). "
             f"Masking required {iteration_counter} iterations."
         )
 

@@ -39,7 +39,7 @@ def generate_insufficient_records_warning_str(
 
 
 def mask_too_few_records(
-    residual_df: pd.DataFrame,
+    residual_dataframe: pd.DataFrame,
     event_cname: str = "event_id",
     site_cname: str = "stat_id",
     mask: Optional[pd.DataFrame] = None,
@@ -52,7 +52,7 @@ def mask_too_few_records(
 
     Parameters
     ----------
-    residual_df: DataFrame
+    residual_dataframe: DataFrame
         Residual DataFrame, has to contain all
         specified IMs (as columns) along with
          columns for event and site id.
@@ -73,6 +73,9 @@ def mask_too_few_records(
     mask: pd.DataFrame
         Mask DataFrame with the same shape as the given residual DataFrame.
     """
+
+    # making a copy to ensure that the original DataFrame is not modified
+    residual_df = residual_dataframe.copy()
 
     ims = residual_df.columns.drop([event_cname, site_cname])
 

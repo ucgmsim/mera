@@ -50,28 +50,8 @@ res_df["stat_id"] = obs_df.stat_id
 res_df["event_id"] = np.char.add("event_", res_df["event_id"].values.astype(str))
 res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
-
-# Test with a random initial mask:
-
-# Get the total number of elements in residual_df[ims]
-total_elements = res_df[ims].size
-
-# Calculate 25% of the total number of elements
-num_false = int(total_elements * 0.25)
-
-# Generate a flat array of True values with the same size as residual_df[ims]
-mask_flat = np.ones(total_elements, dtype=bool)
-
-# Randomly select 25% of the indices in the flat array and set those indices to False
-false_indices = np.random.choice(total_elements, num_false, replace=False)
-mask_flat[false_indices] = False
-
-# Reshape the flat array to the same shape as residual_df[ims]
-mask = mask_flat.reshape(res_df[ims].shape)
-
-mask = pd.DataFrame(mask, columns=ims, index=res_df.index)
-
-###########################
+# Optional: Define an initial mask
+mask = res_df[ims].notnull()
 
 # Optional: Mask out records without sufficient records per station/event.
 mask = utils.mask_too_few_records(

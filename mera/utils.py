@@ -91,11 +91,13 @@ def mask_too_few_records(
 
     iteration_counter = 0
 
+    num_true_in_initial_mask = mask[ims].values.sum()
+    num_false_in_initial_mask = (~mask[ims]).values.sum()
+    num_false_in_previous_mask = num_false_in_initial_mask
+
     # Add the event and site id columns to the mask so that the masked DataFrame will also have those columns for groupby
     mask[event_cname] = True
     mask[site_cname] = True
-    print()
-    num_false_in_previous_mask = (~mask[ims]).values.sum()
 
     while True:
 
@@ -126,8 +128,17 @@ def mask_too_few_records(
 
         num_false_in_previous_mask = num_false_in_current_mask
 
-    print(
-        f"Masked {100*num_false_in_current_mask/mask[ims].size:.2f}% of the records "
-        f"(required {iteration_counter} iterations)."
-    )
+    if num_false_in_initial_mask == 0:
+        print(
+            f"Masked {100*num_false_in_current_mask/mask[ims].size:.2f}% of the records. "
+            f"Masking required {iteration_counter} iterations."
+        )
+
+    if num_false_in_initial_mask > 0:
+        print(
+            f"Masked an additional {num_false_in_current_mask-num_false_in_initial_mask} records "
+            f"({100*(num_false_in_current_mask-num_false_in_initial_mask)/(num_true_in_initial_mask+num_false_in_initial_mask):.2f}%). "
+            f"Masking required {iteration_counter} iterations."
+        )
+
     return mask[ims]

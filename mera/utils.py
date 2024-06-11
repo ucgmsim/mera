@@ -57,7 +57,8 @@ def mask_too_few_records(
         specified IMs (as columns) along with
          columns for event and site id.
     mask: DataFrame, optional
-        Mask DataFrame the same shape as residual_df (including columns for event and site id).
+        Mask DataFrame including the same IM columns as residual_df but not including the site and event id columns
+        (the shape of the mask DataFrame should be the same as residual_df[ims]).
     event_cname: string, default = "event_id"
         Name of the column that contains the event ids.
     site_cname: string, default = "stat_id"
@@ -78,7 +79,7 @@ def mask_too_few_records(
     if mask is None:
         # This mask must always have the event_cname and site_cname columns as all True
         # so residual_df[mask] includes those columns for groupby (below)
-        mask = residual_df.notnull()
+        mask = residual_df[ims].notnull()
 
     # To mask records based on the number of records per station or event, an iterative method is needed.
     # For example, if all records of a particular event are masked, there may then be an insufficient
@@ -87,10 +88,18 @@ def mask_too_few_records(
 
     iteration_counter = 0
 
+    # Add the event and site id columns to the mask so that the masked DataFrame will also have those columns for groupby
+    mask[event_cname] = True
+    mask[site_cname] = True
+
     while True:
 
-        assert all(mask[event_cname] == True), "event_cname column must be all True"
-        assert all(mask[site_cname] == True), "site_cname column must be all True"
+        assert all(
+            mask[event_cname] == True
+        ), "event_cname column in mask must be all True so that residual_df[mask] includes those columns for groupby"
+        assert all(
+            mask[site_cname] == True
+        ), "site_cname column in mask must be all True so that residual_df[mask] includes those columns for groupby"
 
         iteration_counter += 1
 
@@ -106,7 +115,6 @@ def mask_too_few_records(
         num_false_in_previous_mask = (~mask[ims]).sum().sum()
         mask[drop_mask] = False
         num_false_in_mask = (~mask[ims]).sum().sum()
-        print()
 
         # If the number of False values in the mask does not change, break the loop
         if num_false_in_mask == num_false_in_previous_mask:

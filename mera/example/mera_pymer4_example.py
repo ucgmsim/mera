@@ -54,11 +54,10 @@ res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 # Optional: Mask out records without sufficient records per station/event.
 mask = utils.mask_too_few_records(
     res_df,
-    ims,
     event_cname="event_id",
     site_cname="stat_id",
-    min_num_records_per_event=3,
-    min_num_records_per_site=3,
+    min_num_records_per_event=4,
+    min_num_records_per_site=4,
 )
 
 # Run MER
@@ -70,8 +69,8 @@ event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
     mask=mask,
     verbose=True,
     verbose_warnings=True,
-    min_num_records_per_event=3,
-    min_num_records_per_site=3,
+    min_num_records_per_event=4,
+    min_num_records_per_site=4,
 )
 
 # Save the results

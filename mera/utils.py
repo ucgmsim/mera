@@ -94,6 +94,8 @@ def mask_too_few_records(
     # Add the event and site id columns to the mask so that the masked DataFrame will also have those columns for groupby
     mask[event_cname] = True
     mask[site_cname] = True
+    print()
+    num_false_in_previous_mask = (~mask[ims]).values.sum()
 
     while True:
 
@@ -115,16 +117,17 @@ def mask_too_few_records(
             < min_num_records_per_site
         )
 
-        num_false_in_previous_mask = (~mask[ims]).sum().sum()
         mask[drop_mask] = False
-        num_false_in_mask = (~mask[ims]).sum().sum()
+        num_false_in_current_mask = (~mask[ims]).values.sum()
 
         # If the number of False values in the mask does not change, break the loop
-        if num_false_in_mask == num_false_in_previous_mask:
+        if num_false_in_current_mask == num_false_in_previous_mask:
             break
 
+        num_false_in_previous_mask = num_false_in_current_mask
+
     print(
-        f"Masked {100*num_false_in_mask/mask[ims].size:.2f}% of the records "
+        f"Masked {100*num_false_in_current_mask/mask[ims].size:.2f}% of the records "
         f"(required {iteration_counter} iterations)."
     )
     return mask[ims]

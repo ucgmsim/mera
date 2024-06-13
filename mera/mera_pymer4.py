@@ -4,8 +4,6 @@ import numpy as np
 import pandas as pd
 from pymer4.models import Lmer
 
-from mera import utils
-
 
 def run_mera(
     residual_df: pd.DataFrame,
@@ -96,9 +94,6 @@ def run_mera(
         )
         random_effects_columns.append(site_cname)
 
-    # A dictionary to store warnings until they are printed at the end.
-    warning_str_per_im = {im: {"stat_id": [], "event_id": []} for im in ims}
-
     for cur_ix, cur_im in enumerate(ims):
         if verbose:
             print(f"Processing IM {cur_im}, {cur_ix + 1}/{len(ims)}")
@@ -110,6 +105,21 @@ def run_mera(
             if mask is None
             else residual_df[cur_columns].loc[mask[cur_im]]
         )
+
+        if raise_warnings:
+            count_per_event = cur_residual_df.groupby(event_cname).count()[cur_im]
+            count_per_site = cur_residual_df.groupby(site_cname).count()[cur_im]
+
+            warning_counts = pd.concat(
+                [
+                    count_per_event[count_per_event < min_num_records_per_event],
+                    count_per_site[count_per_site < min_num_records_per_site],
+                ],
+                axis=0,
+            )
+
+            for label, count in warning_counts.items():
+                print(f"Warning: For IM {cur_im}, {label} has only {count} records.")
 
         # Check for nans
         if cur_residual_df[cur_im].isna().sum() > 0:
@@ -172,40 +182,6 @@ def run_mera(
             ]
         else:
             print("WARNING: No data for IM, skipping...")
-
-        if raise_warnings:
-            # Store the warning strings to print at the end
-            warning_str_per_im[cur_im]["stat_id"].extend(
-                utils.generate_insufficient_records_warning_str(
-                    cur_residual_df, "stat_id", min_num_records_per_site
-                )
-            )
-
-            warning_str_per_im[cur_im]["event_id"].extend(
-                utils.generate_insufficient_records_warning_str(
-                    cur_residual_df, "event_id", min_num_records_per_event
-                )
-            )
-    # Check if there are any stored warnings
-    if any(
-        len(warning_str_per_im[im]["stat_id"]) > 0
-        or len(warning_str_per_im[im]["event_id"]) > 0
-        for im in ims
-    ):
-        print("Warnings about records with insufficient number of sites or events:")
-        for im in ims:
-            print(f"IM: {im}")
-            print("For stat_id:")
-            # for x in range(len(warning_str_per_im[im]["stat_id"])):
-            #     print(f"Warning for {im}: {warning_str_per_im[im]['stat_id'][x]}")
-            # print("For event_id:")
-            # for x in range(len(warning_str_per_im[im]["event_id"])):
-            #     print(f"Warning for {im}: {warning_str_per_im[im]['event_id'][x]}")
-            for warning_line in warning_str_per_im[im]["stat_id"]:
-                print(f"Warning for {im}: {warning_line}")
-            print("For event_id:")
-            for warning_line in warning_str_per_im[im]["event_id"]:
-                print(f"Warning for {im}: {warning_line}")
 
     # Compute total sigma and return
     if compute_site_term:

@@ -4,7 +4,7 @@ import pandas as pd
 
 
 def generate_insufficient_records_warning_str(
-    residual_df_per_im: pd.DataFrame, group_col: str, min_num_group_warn: int
+    im_residual_df: pd.DataFrame, group_col: str, min_num_records: int
 ) -> list[str]:
     """
     Generates a warning string for records with an insufficient
@@ -12,12 +12,12 @@ def generate_insufficient_records_warning_str(
 
     Parameters
     ----------
-    residual_df_per_im: pd.DataFrame
+    im_residual_df: pd.DataFrame
         The residual DataFrame for a single IM.
     group_col: str
         The column name that contains the record ids to check
         (either event or site ids).
-    min_num_group_warn: int
+    min_num_records: int
            The minimum number of records per site or event required
            to not trigger a warning.
     Returns
@@ -27,12 +27,12 @@ def generate_insufficient_records_warning_str(
         number of records per site or per event.
 
     """
-    count = residual_df_per_im.groupby(group_col).count().iloc[:, 0]
-    mask = count < min_num_group_warn
+    count = im_residual_df.groupby(group_col).count().iloc[:, 0]
+    mask = count < min_num_records
 
     warn_str_lines = [
         f"{count.loc[mask].index[x]} has only {count.loc[mask].iloc[x]} records "
-        f"(recommended minimum is {min_num_group_warn})"
+        f"(recommended minimum is {min_num_records})"
         for x in range(len(count.loc[mask]))
     ]
 
@@ -40,7 +40,7 @@ def generate_insufficient_records_warning_str(
 
 
 def mask_too_few_records(
-    residual_dataframe: pd.DataFrame,
+    residual_df: pd.DataFrame,
     event_cname: str = "event_id",
     site_cname: str = "stat_id",
     mask: Optional[pd.DataFrame] = None,
@@ -53,7 +53,7 @@ def mask_too_few_records(
 
     Parameters
     ----------
-    residual_dataframe: DataFrame
+    residual_df: DataFrame
         Residual DataFrame, has to contain all
         specified IMs (as columns) along with
          columns for event and site id.
@@ -76,7 +76,7 @@ def mask_too_few_records(
     """
 
     # making a copy to ensure that the original DataFrame is not modified
-    residual_df = residual_dataframe.copy()
+    residual_df = residual_df.copy()
 
     ims = residual_df.columns.drop([event_cname, site_cname])
 
@@ -84,6 +84,8 @@ def mask_too_few_records(
         # This mask must always have the event_cname and site_cname columns as all True
         # so residual_df[mask] includes those columns for groupby (below)
         mask = residual_df[ims].notnull()
+
+    print()
 
     # To mask records based on the number of records per station or event, an iterative method is needed.
     # For example, if all records of a particular event are masked, there may then be an insufficient

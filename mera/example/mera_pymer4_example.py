@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mera.mera_pymer4 import run_mera
 from mera import utils
+from mera.mera_pymer4 import run_mera
 
 # Load the data
 data_dir = Path(__file__).parent / "resources"
@@ -59,8 +59,8 @@ mask = utils.mask_too_few_records(
     mask=mask,
     event_cname="event_id",
     site_cname="stat_id",
-    min_num_records_per_event=4,
-    min_num_records_per_site=4,
+    min_num_records_per_event=3,
+    min_num_records_per_site=3,
 )
 
 
@@ -72,7 +72,7 @@ event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
     "stat_id",
     mask=mask,
     verbose=True,
-    verbose_warnings=True,
+    raise_warnings=True,
     min_num_records_per_event=4,
     min_num_records_per_site=4,
 )

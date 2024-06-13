@@ -1,8 +1,9 @@
-from typing import List
+from typing import List, Optional
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from pymer4.models import Lmer
+
 from mera import utils
 
 
@@ -13,7 +14,7 @@ def run_mera(
     site_cname: str,
     assume_biased: bool = True,
     compute_site_term: bool = True,
-    mask: pd.DataFrame = None,
+    mask: pd.DataFrame = Optional[pd.DataFrame],
     verbose: bool = True,
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
@@ -39,21 +40,23 @@ def run_mera(
     site_cname: string
         Name of the column that contains the site ids
         Has no effect if compute_site_term is False
-    assume_biased: bool
+    assume_biased: bool, default = True
         If true then the model fits a bias term, removing
         any model bias (wrt. given dataset)
 
         Recommended to have this enabled, otherwise any model
         bias (wrt. given dataset) will affect random effect
         terms.
-    compute_site_term: bool
+    compute_site_term: bool, default = True
         If true then the model fits a site term
-    mask: dataframe
+    mask: dataframe or None, default = None
         Mask dataframe the size of the residual dataframe
         which selects which values are being used per IM
         for the lmer model. If None then all values are used.
-    verbose: bool
+    verbose: bool, default = True
         If true then prints the progress of the analysis
+    raise_warnings: bool, default = True
+        If true, generates a warning string for records with an insufficient number of records per site or per event.
     min_num_records_per_event : int, default = 3
         The minimum number of records per event required to keep the records.
     min_num_records_per_site : int, default = 3
@@ -94,9 +97,7 @@ def run_mera(
         random_effects_columns.append(site_cname)
 
     # A dictionary to store warnings until they are printed at the end.
-    warning_str_per_im = {}
-    for im in ims:
-        warning_str_per_im[im] = {"stat_id": [], "event_id": []}
+    warning_str_per_im = {im: {"stat_id": [], "event_id": []} for im in ims}
 
     for cur_ix, cur_im in enumerate(ims):
         if verbose:
@@ -185,30 +186,26 @@ def run_mera(
                     cur_residual_df, "event_id", min_num_records_per_event
                 )
             )
-
-    if raise_warnings:
-        AnyWarnings = False
-
-        # Check if there are any warnings
+    # Check if there are any stored warnings
+    if any(
+        len(warning_str_per_im[im]["stat_id"]) > 0
+        or len(warning_str_per_im[im]["event_id"]) > 0
+        for im in ims
+    ):
+        print("Warnings about records with insufficient number of sites or events:")
         for im in ims:
-            if (
-                len(warning_str_per_im[im]["stat_id"]) > 0
-                or len(warning_str_per_im[im]["event_id"]) > 0
-            ):
-                AnyWarnings = True
-                break
-
-        if AnyWarnings:
-            # Print the warnings about records with insufficient number of sites or events
-            print("Warnings about records with insufficient number of sites or events:")
-            for im in ims:
-                print(f"IM: {im}")
-                print("For stat_id:")
-                for x in range(len(warning_str_per_im[im]["stat_id"])):
-                    print(f"Warning for {im}: {warning_str_per_im[im]['stat_id'][x]}")
-                print("For event_id:")
-                for x in range(len(warning_str_per_im[im]["event_id"])):
-                    print(f"Warning for {im}: {warning_str_per_im[im]['event_id'][x]}")
+            print(f"IM: {im}")
+            print("For stat_id:")
+            # for x in range(len(warning_str_per_im[im]["stat_id"])):
+            #     print(f"Warning for {im}: {warning_str_per_im[im]['stat_id'][x]}")
+            # print("For event_id:")
+            # for x in range(len(warning_str_per_im[im]["event_id"])):
+            #     print(f"Warning for {im}: {warning_str_per_im[im]['event_id'][x]}")
+            for warning_line in warning_str_per_im[im]["stat_id"]:
+                print(f"Warning for {im}: {warning_line}")
+            print("For event_id:")
+            for warning_line in warning_str_per_im[im]["event_id"]:
+                print(f"Warning for {im}: {warning_line}")
 
     # Compute total sigma and return
     if compute_site_term:

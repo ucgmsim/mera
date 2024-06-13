@@ -15,7 +15,7 @@ def run_mera(
     compute_site_term: bool = True,
     mask: pd.DataFrame = None,
     verbose: bool = True,
-    verbose_warnings: bool = True,
+    raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
     min_num_records_per_site: int = 3,
 ):
@@ -172,7 +172,7 @@ def run_mera(
         else:
             print("WARNING: No data for IM, skipping...")
 
-        if verbose_warnings:
+        if raise_warnings:
             # Store the warning strings to print at the end
             warning_str_per_im[cur_im]["stat_id"].extend(
                 utils.generate_insufficient_records_warning_str(
@@ -186,7 +186,7 @@ def run_mera(
                 )
             )
 
-    if verbose_warnings:
+    if raise_warnings:
         AnyWarnings = False
 
         # Check if there are any warnings

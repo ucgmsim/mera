@@ -1,5 +1,6 @@
-import pandas as pd
 from typing import Optional
+
+import pandas as pd
 
 
 def generate_insufficient_records_warning_str(

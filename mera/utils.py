@@ -85,8 +85,6 @@ def mask_too_few_records(
         # so residual_df[mask] includes those columns for groupby (below)
         mask = residual_df[ims].notnull()
 
-    print()
-
     # To mask records based on the number of records per station or event, an iterative method is needed.
     # For example, if all records of a particular event are masked, there may then be an insufficient
     # number of records from an affected site, so they need to be masked out too.

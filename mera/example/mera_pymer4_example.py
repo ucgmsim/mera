@@ -7,8 +7,11 @@ from mera import utils
 from mera.mera_pymer4 import run_mera
 
 # Load the data
-data_dir = Path(__file__).parent / "resources"
-output_dir = Path(__file__).parent / "residuals"
+# data_dir = Path(__file__).parent / "resources"
+# output_dir = Path(__file__).parent / "residuals"
+
+data_dir = Path("/home/arr65/src/Andrew_test_code/mera_R/data")
+output_dir = Path("/home/arr65/src/Andrew_test_code/mera_R/data/mera_output")
 output_dir.mkdir(exist_ok=True)
 
 stations_ffp = data_dir / "stations.csv"
@@ -70,7 +73,7 @@ mask = utils.mask_too_few_records(
 )
 
 # Run MER
-event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
+event_res_df, site_res_df, rem_res_df, bias_std_df, stat_standard_err_df = run_mera(
     res_df,
     list(ims),
     "event_id",
@@ -87,3 +90,6 @@ event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
 site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
 bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
+stat_standard_err_df.to_csv(
+    output_dir / "station_standard_error.csv", index_label="stat_id"
+)

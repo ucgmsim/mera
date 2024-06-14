@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+import natsort
 import numpy as np
 import pandas as pd
 from pymer4.models import Lmer
@@ -75,6 +76,9 @@ def run_mera(
         between-site sigma (phi_S2S) (only when compute_site_term is True),
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
+    stat_standard_err_df: dataframe
+           Contains the standard error of the random effects
+            for each site (rows) and IM (columns)
     """
     # Result dataframes
     event_res_df = pd.DataFrame(
@@ -82,6 +86,13 @@ def run_mera(
         columns=ims,
         dtype=float,
     )
+
+    stat_standard_err_df = pd.DataFrame(
+        index=natsort.natsorted(np.unique(residual_df[site_cname].values.astype(str))),
+        columns=ims,
+        dtype=float,
+    )
+
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
     bias_std_df = pd.DataFrame(
         index=ims, columns=["bias", "tau", "phi_S2S", "phi_w", "sigma"], dtype=float
@@ -153,6 +164,20 @@ def run_mera(
                 bias_std_df.loc[cur_im, "phi_S2S"] = cur_model.ranef_var.loc[
                     site_cname, "Std"
                 ]
+
+                postvar = cur_model.postvar
+                postvar = natsort.natsorted(postvar, key=lambda x: x[0])
+
+                postvar_df = pd.DataFrame(
+                    list(zip(*postvar))[1],
+                    columns=[cur_im],
+                    index=list(zip(*postvar))[0],
+                )
+
+                stat_standard_err_df[cur_im] = postvar_df
+
+                print()
+
             # Without site-term
             else:
                 cur_model = Lmer(
@@ -190,7 +215,7 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, site_res_df, rem_res_df, bias_std_df
+        return event_res_df, site_res_df, rem_res_df, bias_std_df, stat_standard_err_df
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (

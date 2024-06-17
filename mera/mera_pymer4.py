@@ -1,8 +1,8 @@
-from typing import List, Optional
-
 import natsort
 import numpy as np
 import pandas as pd
+from typing import List, Optional
+
 from pymer4.models import Lmer
 
 
@@ -77,8 +77,11 @@ def run_mera(
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
     stat_standard_err_df: dataframe
-           Contains the standard error of the random effects
-            for each site (rows) and IM (columns)
+        Contains the standard error of the random effects
+        for each site (rows) and IM (columns)
+    event_standard_err_df: dataframe
+        Contains the standard error of the random effects
+        for each event (rows) and IM (columns)
     """
     # Result dataframes
     event_res_df = pd.DataFrame(
@@ -89,6 +92,12 @@ def run_mera(
 
     stat_standard_err_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[site_cname].values.astype(str))),
+        columns=ims,
+        dtype=float,
+    )
+
+    event_standard_err_df = pd.DataFrame(
+        index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
         columns=ims,
         dtype=float,
     )
@@ -165,18 +174,36 @@ def run_mera(
                     site_cname, "Std"
                 ]
 
-                postvar = cur_model.postvar
-                postvar = natsort.natsorted(postvar, key=lambda x: x[0])
-
-                postvar_df = pd.DataFrame(
-                    list(zip(*postvar))[1],
-                    columns=[cur_im],
-                    index=list(zip(*postvar))[0],
-                )
-
-                stat_standard_err_df[cur_im] = postvar_df
-
+                # If grouping factor has k levels and j random effects per level,
+                # condvar matrices are of shape  j by j by k
+                # https://www.rdocumentation.org/packages/lme4/versions/1.1-35.3/topics/ranef
+                # In this case, j = 1 so it can be transformed to a 1D array.
+                sqrt_condvar_matrices = cur_model.sqrt_condvar_matrices
                 print()
+                sqrt_condvar_dfs = [
+                    pd.DataFrame(
+                        {
+                            "id": sqrt_condvar_matrices[x]["id"],
+                            "sqrt_condvar": sqrt_condvar_matrices[x][
+                                "sqrt_condvar"
+                            ].flatten(),
+                        },
+                    )
+                    for x in sqrt_condvar_matrices
+                ]
+
+                # Sort the DataFrame by the id column
+                for sqrt_condvar_df in sqrt_condvar_dfs:
+                    sqrt_condvar_df.sort_values(
+                        by="id", key=natsort.natsort_keygen(), inplace=True
+                    )
+
+                # Set the index to the id column
+                for sqrt_condvar_df in sqrt_condvar_dfs:
+                    sqrt_condvar_df.set_index("id", inplace=True)
+
+                event_standard_err_df[cur_im] = sqrt_condvar_dfs[0]["sqrt_condvar"]
+                stat_standard_err_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
 
             # Without site-term
             else:
@@ -215,7 +242,14 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, site_res_df, rem_res_df, bias_std_df, stat_standard_err_df
+        return (
+            event_res_df,
+            site_res_df,
+            rem_res_df,
+            bias_std_df,
+            event_standard_err_df,
+            stat_standard_err_df,
+        )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (

@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 from mera import utils
 from mera.mera_pymer4 import run_mera
@@ -73,7 +72,14 @@ mask = utils.mask_too_few_records(
 )
 
 # Run MER
-event_res_df, site_res_df, rem_res_df, bias_std_df, stat_standard_err_df = run_mera(
+(
+    event_res_df,
+    site_res_df,
+    rem_res_df,
+    bias_std_df,
+    event_standard_err_df,
+    stat_standard_err_df,
+) = run_mera(
     res_df,
     list(ims),
     "event_id",
@@ -90,6 +96,9 @@ event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
 site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
 bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
+stat_standard_err_df.to_csv(
+    output_dir / "event_standard_error.csv", index_label="event_id"
+)
 stat_standard_err_df.to_csv(
     output_dir / "station_standard_error.csv", index_label="stat_id"
 )

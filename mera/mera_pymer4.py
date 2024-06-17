@@ -178,18 +178,18 @@ def run_mera(
                 # condvar matrices are of shape  j by j by k
                 # https://www.rdocumentation.org/packages/lme4/versions/1.1-35.3/topics/ranef
                 # In this case, j = 1 so it can be transformed to a 1D array.
-                sqrt_condvar_matrices = cur_model.sqrt_condvar_matrices
+
                 print()
                 sqrt_condvar_dfs = [
                     pd.DataFrame(
                         {
-                            "id": sqrt_condvar_matrices[x]["id"],
-                            "sqrt_condvar": sqrt_condvar_matrices[x][
-                                "sqrt_condvar"
-                            ].flatten(),
+                            "id": cur_model.condvar_matrices[x]["id"],
+                            "sqrt_condvar": np.sqrt(
+                                cur_model.condvar_matrices[x]["condvar"].flatten()
+                            ),
                         },
                     )
-                    for x in sqrt_condvar_matrices
+                    for x in cur_model.condvar_matrices
                 ]
 
                 # Sort the DataFrame by the id column

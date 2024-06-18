@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Optional
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from pymer4.models import Lmer
 
 
@@ -12,8 +12,11 @@ def run_mera(
     site_cname: str,
     assume_biased: bool = True,
     compute_site_term: bool = True,
-    mask: pd.DataFrame = None,
+    mask: pd.DataFrame = Optional[pd.DataFrame],
     verbose: bool = True,
+    raise_warnings: bool = True,
+    min_num_records_per_event: int = 3,
+    min_num_records_per_site: int = 3,
 ):
     """
     Runs mixed effects regression analysis for the given
@@ -35,21 +38,27 @@ def run_mera(
     site_cname: string
         Name of the column that contains the site ids
         Has no effect if compute_site_term is False
-    assume_biased: bool
+    assume_biased: bool, default = True
         If true then the model fits a bias term, removing
         any model bias (wrt. given dataset)
 
         Recommended to have this enabled, otherwise any model
         bias (wrt. given dataset) will affect random effect
         terms.
-    compute_site_term: bool
+    compute_site_term: bool, default = True
         If true then the model fits a site term
-    mask: dataframe
+    mask: dataframe or None, default = None
         Mask dataframe the size of the residual dataframe
         which selects which values are being used per IM
         for the lmer model. If None then all values are used.
-    verbose: bool
+    verbose: bool, default = True
         If true then prints the progress of the analysis
+    raise_warnings: bool, default = True
+        If true, generates a warning string for records with an insufficient number of records per site or per event.
+    min_num_records_per_event : int, default = 3
+        The minimum number of records per event required to keep the records.
+    min_num_records_per_site : int, default = 3
+        The minimum number of records per site required to keep the records.
 
     Returns
     -------
@@ -96,6 +105,21 @@ def run_mera(
             if mask is None
             else residual_df[cur_columns].loc[mask[cur_im]]
         )
+
+        if raise_warnings:
+            count_per_event = cur_residual_df.groupby(event_cname).count()[cur_im]
+            count_per_site = cur_residual_df.groupby(site_cname).count()[cur_im]
+
+            warning_counts = pd.concat(
+                [
+                    count_per_event[count_per_event < min_num_records_per_event],
+                    count_per_site[count_per_site < min_num_records_per_site],
+                ],
+                axis=0,
+            )
+
+            for label, count in warning_counts.items():
+                print(f"Warning: For IM {cur_im}, {label} has only {count} records.")
 
         # Check for nans
         if cur_residual_df[cur_im].isna().sum() > 0:

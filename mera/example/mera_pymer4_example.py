@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from mera import utils
 from mera.mera_pymer4 import run_mera
 
 # Load the data
@@ -49,12 +50,36 @@ res_df["stat_id"] = obs_df.stat_id
 res_df["event_id"] = np.char.add("event_", res_df["event_id"].values.astype(str))
 res_df["stat_id"] = np.char.add("stat_", res_df["stat_id"].values.astype(str))
 
+# Optional: Define an initial mask.
+# A random mask is generated for this example.
+# The fraction of True and False can be changed with the p = [] parameter.
+mask = pd.DataFrame(
+    np.random.choice([True, False], p=[1.0, 0.0], size=res_df[ims].shape),
+    columns=res_df[ims].columns,
+    index=res_df[ims].index,
+)
+
+# Optional: Mask out records without sufficient records per station/event.
+mask = utils.mask_too_few_records(
+    res_df,
+    mask=mask,
+    event_cname="event_id",
+    site_cname="stat_id",
+    min_num_records_per_event=3,
+    min_num_records_per_site=3,
+)
+
 # Run MER
 event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
     res_df,
     list(ims),
     "event_id",
     "stat_id",
+    mask=mask,
+    verbose=True,
+    raise_warnings=True,
+    min_num_records_per_event=3,
+    min_num_records_per_site=3,
 )
 
 # Save the results

@@ -183,8 +183,6 @@ def run_mera(
                     site_cname, "Std"
                 ]
 
-                print()
-
             # Without site-term
             else:
                 cur_model = Lmer(

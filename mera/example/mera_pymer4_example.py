@@ -75,14 +75,7 @@ mask = utils.mask_too_few_records(
 compute_site_term = True
 
 # # Run MER
-(
-    event_res_df,
-    site_res_df,
-    rem_res_df,
-    bias_std_df,
-    event_standard_err_df,
-    stat_standard_err_df,
-) = run_mera(
+results_tuple = run_mera(
     res_df,
     list(ims),
     "event_id",
@@ -94,6 +87,25 @@ compute_site_term = True
     min_num_records_per_event=3,
     min_num_records_per_site=3,
 )
+
+# unpack the results tuple
+if compute_site_term:
+    (
+        event_res_df,
+        site_res_df,
+        rem_res_df,
+        bias_std_df,
+        event_standard_err_df,
+        stat_standard_err_df,
+    ) = results_tuple
+
+if not compute_site_term:
+    (
+        event_res_df,
+        rem_res_df,
+        bias_std_df,
+        event_standard_err_df,
+    ) = results_tuple
 
 # Save the results
 event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")

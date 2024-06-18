@@ -71,7 +71,10 @@ mask = utils.mask_too_few_records(
     min_num_records_per_site=3,
 )
 
-# Run MER
+# Optional: compute site term (recommended)
+compute_site_term = True
+
+# # Run MER
 (
     event_res_df,
     site_res_df,
@@ -84,6 +87,7 @@ mask = utils.mask_too_few_records(
     list(ims),
     "event_id",
     "stat_id",
+    compute_site_term=compute_site_term,
     mask=mask,
     verbose=True,
     raise_warnings=True,
@@ -93,12 +97,14 @@ mask = utils.mask_too_few_records(
 
 # Save the results
 event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
-site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
 bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
-stat_standard_err_df.to_csv(
+event_standard_err_df.to_csv(
     output_dir / "event_standard_error.csv", index_label="event_id"
 )
-stat_standard_err_df.to_csv(
-    output_dir / "station_standard_error.csv", index_label="stat_id"
-)
+if compute_site_term:
+    site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
+
+    stat_standard_err_df.to_csv(
+        output_dir / "station_standard_error.csv", index_label="stat_id"
+    )

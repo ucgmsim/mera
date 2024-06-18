@@ -76,12 +76,14 @@ def run_mera(
         between-site sigma (phi_S2S) (only when compute_site_term is True),
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
-    stat_standard_err_df: dataframe
-        Contains the standard error of the random effects
-        for each site (rows) and IM (columns)
     event_standard_err_df: dataframe
         Contains the standard error of the random effects
         for each event (rows) and IM (columns)
+    stat_standard_err_df: dataframe
+        Contains the standard error of the random effects
+        for each site (rows) and IM (columns)
+        Note: Only returned if compute_site_term is True
+
     """
     # Result dataframes
     event_res_df = pd.DataFrame(
@@ -90,11 +92,14 @@ def run_mera(
         dtype=float,
     )
 
-    stat_standard_err_df = pd.DataFrame(
-        index=natsort.natsorted(np.unique(residual_df[site_cname].values.astype(str))),
-        columns=ims,
-        dtype=float,
-    )
+    if compute_site_term:
+        stat_standard_err_df = pd.DataFrame(
+            index=natsort.natsorted(
+                np.unique(residual_df[site_cname].values.astype(str))
+            ),
+            columns=ims,
+            dtype=float,
+        )
 
     event_standard_err_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
@@ -128,7 +133,11 @@ def run_mera(
 
         if raise_warnings:
             count_per_event = cur_residual_df.groupby(event_cname).count()[cur_im]
-            count_per_site = cur_residual_df.groupby(site_cname).count()[cur_im]
+            count_per_site = (
+                cur_residual_df.groupby(site_cname).count()[cur_im]
+                if compute_site_term
+                else pd.Series()
+            )
 
             warning_counts = pd.concat(
                 [
@@ -174,36 +183,7 @@ def run_mera(
                     site_cname, "Std"
                 ]
 
-                # If grouping factor has k levels and j random effects per level,
-                # condvar matrices are of shape  j by j by k
-                # https://www.rdocumentation.org/packages/lme4/versions/1.1-35.3/topics/ranef
-                # In this case, j = 1 so it can be transformed to a 1D array.
-
                 print()
-                sqrt_condvar_dfs = [
-                    pd.DataFrame(
-                        {
-                            "id": cur_model.condvar_matrices[x]["id"],
-                            "sqrt_condvar": np.sqrt(
-                                cur_model.condvar_matrices[x]["condvar"].flatten()
-                            ),
-                        },
-                    )
-                    for x in cur_model.condvar_matrices
-                ]
-
-                # Sort the DataFrame by the id column
-                for sqrt_condvar_df in sqrt_condvar_dfs:
-                    sqrt_condvar_df.sort_values(
-                        by="id", key=natsort.natsort_keygen(), inplace=True
-                    )
-
-                # Set the index to the id column
-                for sqrt_condvar_df in sqrt_condvar_dfs:
-                    sqrt_condvar_df.set_index("id", inplace=True)
-
-                event_standard_err_df[cur_im] = sqrt_condvar_dfs[0]["sqrt_condvar"]
-                stat_standard_err_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
 
             # Without site-term
             else:
@@ -232,6 +212,38 @@ def run_mera(
             bias_std_df.loc[cur_im, "phi_w"] = cur_model.ranef_var.loc[
                 "Residual", "Std"
             ]
+
+            # If grouping factor has k levels and j random effects per level,
+            # condvar matrices are of shape  j by j by k
+            # https://www.rdocumentation.org/packages/lme4/versions/1.1-35.3/topics/ranef
+            # In this case, j = 1 so it can be transformed to a 1D array.
+
+            sqrt_condvar_dfs = [
+                pd.DataFrame(
+                    {
+                        "id": cur_model.condvar_matrices[x]["id"],
+                        "sqrt_condvar": np.sqrt(
+                            cur_model.condvar_matrices[x]["condvar"].flatten()
+                        ),
+                    },
+                )
+                for x in cur_model.condvar_matrices
+            ]
+
+            # Sort the DataFrame by the id column
+            for sqrt_condvar_df in sqrt_condvar_dfs:
+                sqrt_condvar_df.sort_values(
+                    by="id", key=natsort.natsort_keygen(), inplace=True
+                )
+
+            # Set the index to the id column
+            for sqrt_condvar_df in sqrt_condvar_dfs:
+                sqrt_condvar_df.set_index("id", inplace=True)
+
+            event_standard_err_df[cur_im] = sqrt_condvar_dfs[0]["sqrt_condvar"]
+            if compute_site_term:
+                stat_standard_err_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
+
         else:
             print("WARNING: No data for IM, skipping...")
 
@@ -255,4 +267,4 @@ def run_mera(
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, rem_res_df, bias_std_df
+        return event_res_df, rem_res_df, bias_std_df, event_standard_err_df

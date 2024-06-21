@@ -76,11 +76,11 @@ def run_mera(
         between-site sigma (phi_S2S) (only when compute_site_term is True),
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
-    event_standard_err_df: dataframe
+    event_cond_std_df: dataframe
         Contains the standard error of the random effects
         for each event (rows) and IM (columns)
-    stat_cond_std_df: dataframe
-        Contains the standard error of the random effects
+    site_cond_std_df: dataframe
+        Contains the conditional standard deviations
         for each site (rows) and IM (columns)
         Note: Only returned if compute_site_term is True
 
@@ -93,7 +93,7 @@ def run_mera(
     )
 
     if compute_site_term:
-        stat_cond_std_df = pd.DataFrame(
+        site_cond_std_df = pd.DataFrame(
             index=natsort.natsorted(
                 np.unique(residual_df[site_cname].values.astype(str))
             ),
@@ -101,9 +101,9 @@ def run_mera(
             dtype=float,
         )
 
-        stat_cond_std_df2 = stat_cond_std_df.copy()
+        stat_cond_std_df2 = site_cond_std_df.copy()
 
-    event_standard_err_df = pd.DataFrame(
+    event_cond_std_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
         columns=ims,
         dtype=float,
@@ -216,10 +216,10 @@ def run_mera(
             cur_model.ranef_df.set_index("grp", inplace=True)
             cur_model.ranef_df.index.rename(None, inplace=True)
 
-            event_standard_err_df[cur_im] = cur_model.ranef_df["condsd"]
+            event_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
 
             if compute_site_term:
-                stat_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+                site_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
 
         else:
             print("WARNING: No data for IM, skipping...")
@@ -236,12 +236,12 @@ def run_mera(
             site_res_df,
             rem_res_df,
             bias_std_df,
-            event_standard_err_df,
-            stat_cond_std_df,
+            event_cond_std_df,
+            site_cond_std_df,
         )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, rem_res_df, bias_std_df, event_standard_err_df
+        return event_res_df, rem_res_df, bias_std_df, event_cond_std_df

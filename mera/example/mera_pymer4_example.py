@@ -97,7 +97,6 @@ if compute_site_term:
         bias_std_df,
         event_event_cond_std_df,
         stat_cond_std_df,
-        stat_cond_std_df2,
     ) = results_tuple
 
 if not compute_site_term:
@@ -119,7 +118,3 @@ if compute_site_term:
     site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 
     stat_cond_std_df.to_csv(output_dir / "station_cond_std.csv", index_label="stat_id")
-
-    stat_cond_std_df2.to_csv(
-        output_dir / "station_cond_std2.csv", index_label="stat_id"
-    )

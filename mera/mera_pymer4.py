@@ -213,58 +213,13 @@ def run_mera(
                 "Residual", "Std"
             ]
 
-            # If grouping factor has k levels and j random effects per level,
-            # condvar matrices are of shape  j by j by k
-            # https://www.rdocumentation.org/packages/lme4/versions/1.1-35.3/topics/ranef
-            # In this case, j = 1 so it can be transformed to a 1D array.
+            cur_model.ranef_df.set_index("grp", inplace=True)
+            cur_model.ranef_df.index.rename(None, inplace=True)
 
-            sqrt_condvar_dfs = [
-                pd.DataFrame(
-                    {
-                        "id": cur_model.condvar_matrices[x]["id"],
-                        "sqrt_condvar": np.sqrt(
-                            cur_model.condvar_matrices[x]["condvar"].flatten()
-                        ),
-                    },
-                )
-                for x in cur_model.condvar_matrices
-            ]
+            event_standard_err_df[cur_im] = cur_model.ranef_df["condsd"]
 
-            # Sort the DataFrame by the id column
-            for sqrt_condvar_df in sqrt_condvar_dfs:
-                sqrt_condvar_df.sort_values(
-                    by="id", key=natsort.natsort_keygen(), inplace=True
-                )
-
-            # Set the index to the id column
-            for sqrt_condvar_df in sqrt_condvar_dfs:
-                sqrt_condvar_df.set_index("id", inplace=True)
-
-            event_standard_err_df[cur_im] = sqrt_condvar_dfs[0]["sqrt_condvar"]
             if compute_site_term:
-                stat_cond_std_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
-
-                df1 = cur_model.ranef_df
-                print()
-
-                # cur_model.ranef_df.set_index(
-                #     cur_model.ranef_df["grpvar"].str[:-2]
-                #     + cur_model.ranef_df["grp"].astype(str),
-                #     inplace=True,
-                # )
-
-                # put cur_model.ranef_df["condsd"] into the cur_im column of stat_cond_std_df2, noting that they have corresponding indices
-                cur_model.ranef_df.set_index("grp", inplace=True)
-                cur_model.ranef_df.index.rename(None, inplace=True)
-                stat_cond_std_df2[cur_im] = cur_model.ranef_df["condsd"]
-
-                # stat_cond_std_df2[cur_im] = cur_model.ranef_df["condsd"]
-
-                print()
-                # df1 = cur_model.ranef_df
-
-                # make a new column in df1 that combines the grpvar and grp columns noting that grpvar is a column of strings and grp is a columns of ints. We also want to delete the last two characters of the strings in the grpvar column.
-                # df1["grpvar_grp"] = df1["grpvar"].str[:-2] + df1["grp"].astype(str)
+                stat_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
 
         else:
             print("WARNING: No data for IM, skipping...")
@@ -283,7 +238,6 @@ def run_mera(
             bias_std_df,
             event_standard_err_df,
             stat_cond_std_df,
-            stat_cond_std_df2,
         )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])

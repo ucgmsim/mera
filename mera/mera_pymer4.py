@@ -79,7 +79,7 @@ def run_mera(
     event_standard_err_df: dataframe
         Contains the standard error of the random effects
         for each event (rows) and IM (columns)
-    stat_standard_err_df: dataframe
+    stat_cond_std_df: dataframe
         Contains the standard error of the random effects
         for each site (rows) and IM (columns)
         Note: Only returned if compute_site_term is True
@@ -93,13 +93,15 @@ def run_mera(
     )
 
     if compute_site_term:
-        stat_standard_err_df = pd.DataFrame(
+        stat_cond_std_df = pd.DataFrame(
             index=natsort.natsorted(
                 np.unique(residual_df[site_cname].values.astype(str))
             ),
             columns=ims,
             dtype=float,
         )
+
+        stat_cond_std_df2 = stat_cond_std_df.copy()
 
     event_standard_err_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
@@ -240,7 +242,29 @@ def run_mera(
 
             event_standard_err_df[cur_im] = sqrt_condvar_dfs[0]["sqrt_condvar"]
             if compute_site_term:
-                stat_standard_err_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
+                stat_cond_std_df[cur_im] = sqrt_condvar_dfs[1]["sqrt_condvar"]
+
+                df1 = cur_model.ranef_df
+                print()
+
+                # cur_model.ranef_df.set_index(
+                #     cur_model.ranef_df["grpvar"].str[:-2]
+                #     + cur_model.ranef_df["grp"].astype(str),
+                #     inplace=True,
+                # )
+
+                # put cur_model.ranef_df["condsd"] into the cur_im column of stat_cond_std_df2, noting that they have corresponding indices
+                cur_model.ranef_df.set_index("grp", inplace=True)
+                cur_model.ranef_df.index.rename(None, inplace=True)
+                stat_cond_std_df2[cur_im] = cur_model.ranef_df["condsd"]
+
+                # stat_cond_std_df2[cur_im] = cur_model.ranef_df["condsd"]
+
+                print()
+                # df1 = cur_model.ranef_df
+
+                # make a new column in df1 that combines the grpvar and grp columns noting that grpvar is a column of strings and grp is a columns of ints. We also want to delete the last two characters of the strings in the grpvar column.
+                # df1["grpvar_grp"] = df1["grpvar"].str[:-2] + df1["grp"].astype(str)
 
         else:
             print("WARNING: No data for IM, skipping...")
@@ -258,7 +282,8 @@ def run_mera(
             rem_res_df,
             bias_std_df,
             event_standard_err_df,
-            stat_standard_err_df,
+            stat_cond_std_df,
+            stat_cond_std_df2,
         )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])

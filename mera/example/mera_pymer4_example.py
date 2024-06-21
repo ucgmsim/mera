@@ -95,8 +95,9 @@ if compute_site_term:
         site_res_df,
         rem_res_df,
         bias_std_df,
-        event_standard_err_df,
-        stat_standard_err_df,
+        event_event_cond_std_df,
+        stat_cond_std_df,
+        stat_cond_std_df2,
     ) = results_tuple
 
 if not compute_site_term:
@@ -104,19 +105,21 @@ if not compute_site_term:
         event_res_df,
         rem_res_df,
         bias_std_df,
-        event_standard_err_df,
+        event_event_cond_std_df,
     ) = results_tuple
 
 # Save the results
 event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
 rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
 bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
-event_standard_err_df.to_csv(
+event_event_cond_std_df.to_csv(
     output_dir / "event_standard_error.csv", index_label="event_id"
 )
 if compute_site_term:
     site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 
-    stat_standard_err_df.to_csv(
-        output_dir / "station_standard_error.csv", index_label="stat_id"
+    stat_cond_std_df.to_csv(output_dir / "station_cond_std.csv", index_label="stat_id")
+
+    stat_cond_std_df2.to_csv(
+        output_dir / "station_cond_std2.csv", index_label="stat_id"
     )

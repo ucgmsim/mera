@@ -77,7 +77,7 @@ def run_mera(
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
     event_cond_std_df: dataframe
-        Contains the standard error of the random effects
+        Contains the conditional standard deviations
         for each event (rows) and IM (columns)
     site_cond_std_df: dataframe
         Contains the conditional standard deviations
@@ -101,8 +101,6 @@ def run_mera(
             dtype=float,
         )
 
-        stat_cond_std_df2 = site_cond_std_df.copy()
-
     event_cond_std_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
         columns=ims,
@@ -111,7 +109,9 @@ def run_mera(
 
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
     bias_std_df = pd.DataFrame(
-        index=ims, columns=["bias", "tau", "phi_S2S", "phi_w", "sigma"], dtype=float
+        index=ims,
+        columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
+        dtype=float,
     )
 
     random_effects_columns = [event_cname]
@@ -206,6 +206,7 @@ def run_mera(
 
             # Get bias
             bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
+            bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
 
             # Get standard deviations
             bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]
@@ -213,6 +214,7 @@ def run_mera(
                 "Residual", "Std"
             ]
 
+            # set the index of ranef_df so it matches those of the output DataFrames
             cur_model.ranef_df.set_index("grp", inplace=True)
             cur_model.ranef_df.index.rename(None, inplace=True)
 
@@ -231,6 +233,7 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
+        print()
         return (
             event_res_df,
             site_res_df,
@@ -244,4 +247,5 @@ def run_mera(
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
+        print()
         return event_res_df, rem_res_df, bias_std_df, event_cond_std_df

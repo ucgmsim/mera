@@ -6,11 +6,9 @@ from mera import utils
 from mera.mera_pymer4 import run_mera
 
 # Load the data
-# data_dir = Path(__file__).parent / "resources"
-# output_dir = Path(__file__).parent / "residuals"
+data_dir = Path(__file__).parent / "resources"
+output_dir = Path(__file__).parent / "residuals"
 
-data_dir = Path("/home/arr65/src/Andrew_test_code/mera_R/data")
-output_dir = Path("/home/arr65/src/Andrew_test_code/mera_R/data/mera_output")
 output_dir.mkdir(exist_ok=True)
 
 stations_ffp = data_dir / "stations.csv"

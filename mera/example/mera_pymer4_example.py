@@ -97,15 +97,13 @@ if compute_site_term:
         bias_std_df,
         event_event_cond_std_df,
         stat_cond_std_df,
+        fit_df,
     ) = results_tuple
 
 if not compute_site_term:
-    (
-        event_res_df,
-        rem_res_df,
-        bias_std_df,
-        event_event_cond_std_df,
-    ) = results_tuple
+    (event_res_df, rem_res_df, bias_std_df, event_event_cond_std_df, fit_df) = (
+        results_tuple
+    )
 
 # Save the results
 event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
@@ -114,6 +112,8 @@ bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
 event_event_cond_std_df.to_csv(
     output_dir / "event_cond_std.csv", index_label="event_id"
 )
+fit_df.to_csv(output_dir / "fit.csv", index_label="gm_id")
+
 if compute_site_term:
     site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 

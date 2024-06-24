@@ -108,6 +108,9 @@ def run_mera(
     )
 
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
+
+    fit_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
+
     bias_std_df = pd.DataFrame(
         index=ims,
         columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
@@ -201,12 +204,15 @@ def run_mera(
             event_res_df.loc[event_re.index, cur_im] = event_re
             if mask is None:
                 rem_res_df[cur_im] = cur_model.residuals
+                fit_df[cur_im] = cur_model.fits
             else:
                 rem_res_df.loc[mask[cur_im], cur_im] = cur_model.residuals
+                fit_df.loc[mask[cur_im], cur_im] = cur_model.fits
 
             # Get bias
-            bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
-            bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
+            if assume_biased:
+                bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
+                bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
 
             # Get standard deviations
             bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]
@@ -233,7 +239,6 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        print()
         return (
             event_res_df,
             site_res_df,
@@ -241,11 +246,11 @@ def run_mera(
             bias_std_df,
             event_cond_std_df,
             site_cond_std_df,
+            fit_df,
         )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        print()
-        return event_res_df, rem_res_df, bias_std_df, event_cond_std_df
+        return event_res_df, rem_res_df, bias_std_df, event_cond_std_df, fit_df

@@ -78,12 +78,13 @@ def run_mera(
         per IM (rows)
     event_cond_std_df: dataframe
         Contains the conditional standard deviations
-        for each event (rows) and IM (columns)
+        for each event (rows) and IM (columns) (similar to a standard error)
     site_cond_std_df: dataframe
         Contains the conditional standard deviations
-        for each site (rows) and IM (columns)
+        for each site (rows) and IM (columns) (similar to a standard error)
         Note: Only returned if compute_site_term is True
-
+    fit_df: dataframe
+        Contains the fitted values for each record (rows) and IM (columns)
     """
     # Result dataframes
     event_res_df = pd.DataFrame(

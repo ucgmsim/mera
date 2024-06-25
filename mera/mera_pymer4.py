@@ -1,9 +1,74 @@
 import natsort
 import numpy as np
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, NamedTuple
 
 from pymer4.models import Lmer
+
+
+class MeraResults(NamedTuple):
+    """
+    The results of the MERA analysis.
+
+    Parameters
+    ----------
+    event_res_df: dataframe
+        Contains the random effect for each event (rows) and IM (columns)
+    event_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each event (rows) and IM (columns) (similar to a standard error)
+    rem_res_df: dataframe
+        Contains the leftover residuals for
+        each record (rows) and IM (columns)
+    bias_std_df: dataframe
+        Contains bias, between-event sigma (tau),
+        between-site sigma (phi_S2S) (only when compute_site_term is True),
+        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
+        per IM (rows)
+    fit_df: dataframe
+        Contains the fitted values for each record (rows) and IM (columns)
+    site_res_df: dataframe
+        Contains the random effect for each site (rows) and IM (columns)
+        Note: Only returned if compute_site_term is True
+    site_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each site (rows) and IM (columns) (similar to a standard error)
+        Note: Only returned if compute_site_term is True
+
+
+    Attributes
+    ----------
+    event_res_df: dataframe
+        Contains the random effect for each event (rows) and IM (columns)
+    event_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each event (rows) and IM (columns) (similar to a standard error)
+    rem_res_df: dataframe
+        Contains the leftover residuals for
+        each record (rows) and IM (columns)
+    bias_std_df: dataframe
+        Contains bias, between-event sigma (tau),
+        between-site sigma (phi_S2S) (only when compute_site_term is True),
+        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
+        per IM (rows)
+    fit_df: dataframe
+        Contains the fitted values for each record (rows) and IM (columns)
+    site_res_df: dataframe
+        Contains the random effect for each site (rows) and IM (columns)
+        Note: Only returned if compute_site_term is True
+    site_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each site (rows) and IM (columns) (similar to a standard error)
+        Note: Only returned if compute_site_term is True
+    """
+
+    event_res_df: pd.DataFrame
+    event_cond_std_df: pd.DataFrame
+    rem_res_df: pd.DataFrame
+    bias_std_df: pd.DataFrame
+    fit_df: pd.DataFrame
+    site_res_df: Optional[pd.DataFrame]
+    site_cond_std_df: Optional[pd.DataFrame]
 
 
 def run_mera(
@@ -65,9 +130,9 @@ def run_mera(
     -------
     event_res_df: dataframe
         Contains the random effect for each event (rows) and IM (columns)
-    site_res_df: dataframe
-        Contains the random effect for each site (rows) and IM (columns)
-        Note: Only returned if compute_site_term is True
+    event_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each event (rows) and IM (columns) (similar to a standard error)
     rem_res_df: dataframe
         Contains the leftover residuals for
         each record (rows) and IM (columns)
@@ -76,16 +141,17 @@ def run_mera(
         between-site sigma (phi_S2S) (only when compute_site_term is True),
         remaining residual sigma (phi_w) and total sigma (sigma) (columns)
         per IM (rows)
-    event_cond_std_df: dataframe
-        Contains the conditional standard deviations
-        for each event (rows) and IM (columns) (similar to a standard error)
+    fit_df: dataframe
+        Contains the fitted values for each record (rows) and IM (columns)
+    site_res_df: dataframe
+        Contains the random effect for each site (rows) and IM (columns)
+        Note: Only returned if compute_site_term is True
     site_cond_std_df: dataframe
         Contains the conditional standard deviations
         for each site (rows) and IM (columns) (similar to a standard error)
         Note: Only returned if compute_site_term is True
-    fit_df: dataframe
-        Contains the fitted values for each record (rows) and IM (columns)
     """
+
     # Result dataframes
     event_res_df = pd.DataFrame(
         index=np.unique(residual_df[event_cname].values.astype(str)),
@@ -240,18 +306,26 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return (
+        return MeraResults(
             event_res_df,
-            site_res_df,
+            event_cond_std_df,
             rem_res_df,
             bias_std_df,
-            event_cond_std_df,
-            site_cond_std_df,
             fit_df,
+            site_res_df,
+            site_cond_std_df,
         )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, rem_res_df, bias_std_df, event_cond_std_df, fit_df
+        return MeraResults(
+            event_res_df,
+            event_cond_std_df,
+            rem_res_df,
+            bias_std_df,
+            fit_df,
+            None,
+            None,
+        )

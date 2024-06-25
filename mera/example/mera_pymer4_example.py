@@ -73,7 +73,7 @@ mask = utils.mask_too_few_records(
 compute_site_term = True
 
 # # Run MER
-results_tuple = run_mera(
+results = run_mera(
     res_df,
     list(ims),
     "event_id",
@@ -87,32 +87,35 @@ results_tuple = run_mera(
 )
 
 # unpack the results tuple
-if compute_site_term:
-    (
-        event_res_df,
-        site_res_df,
-        rem_res_df,
-        bias_std_df,
-        event_event_cond_std_df,
-        stat_cond_std_df,
-        fit_df,
-    ) = results_tuple
+# if compute_site_term:
+#     (
+#         event_res_df,
+#         site_res_df,
+#         rem_res_df,
+#         bias_std_df,
+#         event_event_cond_std_df,
+#         stat_cond_std_df,
+#         fit_df,
+#     ) = results_tuple
+#
+# if not compute_site_term:
+#     (event_res_df, rem_res_df, bias_std_df, event_event_cond_std_df, fit_df) = (
+#         results_tuple
+#     )
 
-if not compute_site_term:
-    (event_res_df, rem_res_df, bias_std_df, event_event_cond_std_df, fit_df) = (
-        results_tuple
-    )
 
 # Save the results
-event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
-rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
-bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
-event_event_cond_std_df.to_csv(
+results.event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
+results.event_cond_std_df.to_csv(
     output_dir / "event_cond_std.csv", index_label="event_id"
 )
-fit_df.to_csv(output_dir / "fit.csv", index_label="gm_id")
+results.rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
+results.bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
+results.fit_df.to_csv(output_dir / "fit.csv", index_label="gm_id")
 
 if compute_site_term:
-    site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
+    results.site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
 
-    stat_cond_std_df.to_csv(output_dir / "station_cond_std.csv", index_label="stat_id")
+    results.site_cond_std_df.to_csv(
+        output_dir / "station_cond_std.csv", index_label="stat_id"
+    )

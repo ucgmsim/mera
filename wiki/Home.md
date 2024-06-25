@@ -11,7 +11,15 @@ intercept, $c$, and the slope, $m$, if fitting a function such as $f(x) = m \tim
 numerical independent variable like $x$, so we cannot estimate a simple slope like $m$. However, we can 
 (optionally) fit the "intercept", which represents an overall _bias_ affecting all observations. Random 
 effects contribute additional variation to the model to help explain features that are not captured by the fixed 
-effects of the model. In our case, each event and (optionally) site contributes a random effect to the model.
+effects of the model. This is illustrated by Fig. 1, which shows a mixed effects regression on several groups of data.
+Here, the slope remains constant and the intercept is allowed to vary. Fitting the intercept as a fixed effect produces 
+the black line labelled $\mu_{\textrm{group}} that passes through the approximate center of all data points. 
+Adding a random effect for each group improves the fit for each group, as indicated by the other colored lines. 
+In our case, each event and (optionally) site contributes a random effect to the model.
+
+![Fig. 1: Example mixed effects regression where the slope remains constant and the intercept is allowed to vary. 
+The black line represents the result of fitting the intercept as a fixed effect. The other lines represent the
+result of adding a random effect for each group.](images/variable_intercept.png)
 
 ## Interpreting random effects
 
@@ -35,7 +43,7 @@ the [R programming language](https://www.r-project.org/about.html). It achieves 
 the [Pymer4](https://github.com/ejolly/pymer4) package which uses the [rpy2](https://github.com/rpy2/rpy2)
 library to establish an interface between Python and R.
 
-R is an open source programming language that is often used for robust statistical analyses. 
+R is an open source programming language that is often used for statistical analyses. 
 The primary developer of R’s `lme4` package is a statistician called Douglas Bates who took great care to ensure that 
 the `lme4` package is extremely statistically robust. As a consequence, `lme4` explicitly provides standard errors for 
 fixed effects parameters like the “intercept” or overall bias, but does not provide standard errors for random effects. 

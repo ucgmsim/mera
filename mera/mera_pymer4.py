@@ -8,33 +8,7 @@ from pymer4.models import Lmer
 
 class MeraResults(NamedTuple):
     """
-    The results of the MERA analysis.
-
-    Parameters
-    ----------
-    event_res_df: dataframe
-        Contains the random effect for each event (rows) and IM (columns)
-    event_cond_std_df: dataframe
-        Contains the conditional standard deviations
-        for each event (rows) and IM (columns) (similar to a standard error)
-    rem_res_df: dataframe
-        Contains the leftover residuals for
-        each record (rows) and IM (columns)
-    bias_std_df: dataframe
-        Contains bias, between-event sigma (tau),
-        between-site sigma (phi_S2S) (only when compute_site_term is True),
-        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
-        per IM (rows)
-    fit_df: dataframe
-        Contains the fitted values for each record (rows) and IM (columns)
-    site_res_df: dataframe
-        Contains the random effect for each site (rows) and IM (columns)
-        Note: Only returned if compute_site_term is True
-    site_cond_std_df: dataframe
-        Contains the conditional standard deviations
-        for each site (rows) and IM (columns) (similar to a standard error)
-        Note: Only returned if compute_site_term is True
-
+    The results of the mixed-effects regression analysis.
 
     Attributes
     ----------
@@ -83,7 +57,7 @@ def run_mera(
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
     min_num_records_per_site: int = 3,
-):
+) -> MeraResults:
     """
     Runs mixed effects regression analysis for the given
     residual dataframe using pymer4 package
@@ -128,28 +102,8 @@ def run_mera(
 
     Returns
     -------
-    event_res_df: dataframe
-        Contains the random effect for each event (rows) and IM (columns)
-    event_cond_std_df: dataframe
-        Contains the conditional standard deviations
-        for each event (rows) and IM (columns) (similar to a standard error)
-    rem_res_df: dataframe
-        Contains the leftover residuals for
-        each record (rows) and IM (columns)
-    bias_std_df: dataframe
-        Contains bias, between-event sigma (tau),
-        between-site sigma (phi_S2S) (only when compute_site_term is True),
-        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
-        per IM (rows)
-    fit_df: dataframe
-        Contains the fitted values for each record (rows) and IM (columns)
-    site_res_df: dataframe
-        Contains the random effect for each site (rows) and IM (columns)
-        Note: Only returned if compute_site_term is True
-    site_cond_std_df: dataframe
-        Contains the conditional standard deviations
-        for each site (rows) and IM (columns) (similar to a standard error)
-        Note: Only returned if compute_site_term is True
+    MeraResults:
+        Results of the mixed-effects regression analysis
     """
 
     # Result dataframes

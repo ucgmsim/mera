@@ -1,7 +1,7 @@
 import natsort
 import numpy as np
 import pandas as pd
-from typing import List, Optional, NamedTuple
+from typing import NamedTuple, Optional
 
 from pymer4.models import Lmer
 

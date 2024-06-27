@@ -86,24 +86,6 @@ results = run_mera(
     min_num_records_per_site=3,
 )
 
-# unpack the results tuple
-# if compute_site_term:
-#     (
-#         event_res_df,
-#         site_res_df,
-#         rem_res_df,
-#         bias_std_df,
-#         event_event_cond_std_df,
-#         stat_cond_std_df,
-#         fit_df,
-#     ) = results_tuple
-#
-# if not compute_site_term:
-#     (event_res_df, rem_res_df, bias_std_df, event_event_cond_std_df, fit_df) = (
-#         results_tuple
-#     )
-
-
 # Save the results
 results.event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
 results.event_cond_std_df.to_csv(

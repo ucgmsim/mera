@@ -13,7 +13,7 @@ numerical independent variable like $x$, so we cannot estimate a simple slope li
 effects contribute additional variation to the model to help explain features that are not captured by the fixed 
 effects of the model. This is illustrated by Fig. 1, which shows a mixed effects regression on several groups of data.
 Here, the slope remains constant and the intercept is allowed to vary. Fitting the intercept as a fixed effect produces 
-the black line labelled $\mu_{\textrm{group}} that passes through the approximate center of all data points. 
+the black line labelled $\mu_{\textrm{group}}$ that passes through the approximate center of all data points. 
 Adding a random effect for each group improves the fit for each group, as indicated by the other colored lines. 
 In our case, each event and (optionally) site contributes a random effect to the model.
 

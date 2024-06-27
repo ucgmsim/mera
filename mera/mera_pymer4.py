@@ -2,7 +2,7 @@ import natsort
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 from pymer4.models import Lmer
 
@@ -49,7 +49,7 @@ class MeraResults:
 
 def run_mera(
     residual_df: pd.DataFrame,
-    ims: List[str],
+    ims: list[str],
     event_cname: str,
     site_cname: str,
     assume_biased: bool = True,

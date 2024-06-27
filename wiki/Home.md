@@ -21,6 +21,10 @@ In our case, each event and (optionally) site contributes a random effect to the
 The black line represents the result of fitting the intercept as a fixed effect. The other lines represent the
 result of adding a random effect for each group. Figure adopted from pythonfordatascience.org at this 
 [link.](https://www.pythonfordatascience.org/mixed-effects-regression-python/)](images/variable_intercept.png)
+*Fig. 1: Example mixed effects regression where the slope remains constant and the intercept is allowed to vary. 
+The black line represents the result of fitting the intercept as a fixed effect. The other lines represent the
+result of adding a random effect for each group. Figure adopted from pythonfordatascience.org at this 
+[link.](https://www.pythonfordatascience.org/mixed-effects-regression-python/)*
 
 ## Interpreting random effects
 

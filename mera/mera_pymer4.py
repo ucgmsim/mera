@@ -1,12 +1,14 @@
 import natsort
 import numpy as np
 import pandas as pd
-from typing import List, Optional, NamedTuple
+from dataclasses import dataclass
+from typing import List, Optional
 
 from pymer4.models import Lmer
 
 
-class MeraResults(NamedTuple):
+@dataclass
+class MeraResults:
     """
     The results of the mixed-effects regression analysis.
 

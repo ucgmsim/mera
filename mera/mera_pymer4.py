@@ -47,7 +47,7 @@ class MeraResults(NamedTuple):
 
 def run_mera(
     residual_df: pd.DataFrame,
-    ims: List[str],
+    ims: list[str],
     event_cname: str,
     site_cname: str,
     assume_biased: bool = True,

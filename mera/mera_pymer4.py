@@ -1,13 +1,55 @@
-from typing import List, Optional
-
+import natsort
 import numpy as np
 import pandas as pd
+from dataclasses import dataclass
+from typing import Optional
+
 from pymer4.models import Lmer
+
+
+@dataclass
+class MeraResults:
+    """
+    The results of the mixed-effects regression analysis.
+
+    Attributes
+    ----------
+    event_res_df: dataframe
+        Contains the random effect for each event (rows) and IM (columns)
+    event_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each event (rows) and IM (columns) (similar to a standard error)
+    rem_res_df: dataframe
+        Contains the leftover residuals for
+        each record (rows) and IM (columns)
+    bias_std_df: dataframe
+        Contains bias, between-event sigma (tau),
+        between-site sigma (phi_S2S) (only when compute_site_term is True),
+        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
+        per IM (rows)
+    fit_df: dataframe
+        Contains the fitted values for each record (rows) and IM (columns)
+    site_res_df: dataframe
+        Contains the random effect for each site (rows) and IM (columns)
+        Note: Only returned if compute_site_term is True
+    site_cond_std_df: dataframe
+        Contains the conditional standard deviations
+        for each site (rows) and IM (columns) (similar to a standard error)
+        Note: Only returned if compute_site_term is True
+    """
+
+    event_res_df: pd.DataFrame
+    event_cond_std_df: pd.DataFrame
+    rem_res_df: pd.DataFrame
+    bias_std_df: pd.DataFrame
+    fit_df: pd.DataFrame
+    site_res_df: Optional[pd.DataFrame]
+    site_cond_std_df: Optional[pd.DataFrame]
 
 
 def run_mera(
     residual_df: pd.DataFrame,
-    ims: List[str],
+    ims: list[str],
     event_cname: str,
     site_cname: str,
     assume_biased: bool = True,
@@ -17,7 +59,7 @@ def run_mera(
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
     min_num_records_per_site: int = 3,
-):
+) -> MeraResults:
     """
     Runs mixed effects regression analysis for the given
     residual dataframe using pymer4 package
@@ -62,29 +104,40 @@ def run_mera(
 
     Returns
     -------
-    event_res_df: dataframe
-        Contains the random effect for each event (rows) and IM (columns)
-    site_res_df: dataframe
-        Contains the random effect for each site (rows) and IM (columns)
-        Note: Only returned if compute_site_term is True
-    rem_res_df: dataframe
-        Contains the leftover residuals for
-        each record (rows) and IM (columns)
-    bias_std_df: dataframe
-        Contains bias, between-event sigma (tau),
-        between-site sigma (phi_S2S) (only when compute_site_term is True),
-        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
-        per IM (rows)
+    MeraResults:
+        Results of the mixed-effects regression analysis
     """
+
     # Result dataframes
     event_res_df = pd.DataFrame(
         index=np.unique(residual_df[event_cname].values.astype(str)),
         columns=ims,
         dtype=float,
     )
+
+    if compute_site_term:
+        site_cond_std_df = pd.DataFrame(
+            index=natsort.natsorted(
+                np.unique(residual_df[site_cname].values.astype(str))
+            ),
+            columns=ims,
+            dtype=float,
+        )
+
+    event_cond_std_df = pd.DataFrame(
+        index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
+        columns=ims,
+        dtype=float,
+    )
+
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
+
+    fit_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
+
     bias_std_df = pd.DataFrame(
-        index=ims, columns=["bias", "tau", "phi_S2S", "phi_w", "sigma"], dtype=float
+        index=ims,
+        columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
+        dtype=float,
     )
 
     random_effects_columns = [event_cname]
@@ -108,7 +161,11 @@ def run_mera(
 
         if raise_warnings:
             count_per_event = cur_residual_df.groupby(event_cname).count()[cur_im]
-            count_per_site = cur_residual_df.groupby(site_cname).count()[cur_im]
+            count_per_site = (
+                cur_residual_df.groupby(site_cname).count()[cur_im]
+                if compute_site_term
+                else pd.Series()
+            )
 
             warning_counts = pd.concat(
                 [
@@ -153,6 +210,7 @@ def run_mera(
                 bias_std_df.loc[cur_im, "phi_S2S"] = cur_model.ranef_var.loc[
                     site_cname, "Std"
                 ]
+
             # Without site-term
             else:
                 cur_model = Lmer(
@@ -169,17 +227,31 @@ def run_mera(
             event_res_df.loc[event_re.index, cur_im] = event_re
             if mask is None:
                 rem_res_df[cur_im] = cur_model.residuals
+                fit_df[cur_im] = cur_model.fits
             else:
                 rem_res_df.loc[mask[cur_im], cur_im] = cur_model.residuals
+                fit_df.loc[mask[cur_im], cur_im] = cur_model.fits
 
             # Get bias
-            bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
+            if assume_biased:
+                bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
+                bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
 
             # Get standard deviations
             bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]
             bias_std_df.loc[cur_im, "phi_w"] = cur_model.ranef_var.loc[
                 "Residual", "Std"
             ]
+
+            # set the index of ranef_df so it matches those of the output DataFrames
+            cur_model.ranef_df.set_index("grp", inplace=True)
+            cur_model.ranef_df.index.rename(None, inplace=True)
+
+            event_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+
+            if compute_site_term:
+                site_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+
         else:
             print("WARNING: No data for IM, skipping...")
 
@@ -190,10 +262,26 @@ def run_mera(
             + bias_std_df["phi_S2S"] ** 2
             + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, site_res_df, rem_res_df, bias_std_df
+        return MeraResults(
+            event_res_df,
+            event_cond_std_df,
+            rem_res_df,
+            bias_std_df,
+            fit_df,
+            site_res_df,
+            site_cond_std_df,
+        )
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
         ) ** (1 / 2)
-        return event_res_df, rem_res_df, bias_std_df
+        return MeraResults(
+            event_res_df,
+            event_cond_std_df,
+            rem_res_df,
+            bias_std_df,
+            fit_df,
+            None,
+            None,
+        )

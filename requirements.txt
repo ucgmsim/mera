@@ -1,5 +1,5 @@
 numpy
 pandas
-pymer4 @ https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std
+pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std
 statsmodels
 natsort

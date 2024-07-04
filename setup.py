@@ -6,4 +6,7 @@ setup(
     packages=find_packages(),
     url="https://github.com/ucgmsim/mera",
     description="Code for GM prediction mixed-effects regression analysis",
+    install_requires=[
+        "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
+    ],
 )

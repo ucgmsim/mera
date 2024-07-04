@@ -7,10 +7,10 @@ setup(
     url="https://github.com/ucgmsim/mera",
     description="Code for GM prediction mixed-effects regression analysis",
     install_requires=[
-        "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
+        "numpy==1.26.4",
+        "statsmodels",
         "natsort",
         "pandas",
-        "statsmodels",
-        "numpy==1.26.4",
+        "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
     ],
 )

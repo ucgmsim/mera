@@ -1,4 +1,4 @@
-numpy
+numpy==1.26.4
 pandas
 pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std
 statsmodels

@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 from mera import utils
 from mera.mera_pymer4 import run_mera
@@ -9,6 +8,7 @@ from mera.mera_pymer4 import run_mera
 # Load the data
 data_dir = Path(__file__).parent / "resources"
 output_dir = Path(__file__).parent / "residuals"
+
 output_dir.mkdir(exist_ok=True)
 
 stations_ffp = data_dir / "stations.csv"
@@ -69,12 +69,16 @@ mask = utils.mask_too_few_records(
     min_num_records_per_site=3,
 )
 
-# Run MER
-event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
+# Optional: compute site term (recommended)
+compute_site_term = True
+
+# # Run MER
+results = run_mera(
     res_df,
     list(ims),
     "event_id",
     "stat_id",
+    compute_site_term=compute_site_term,
     mask=mask,
     verbose=True,
     raise_warnings=True,
@@ -83,7 +87,17 @@ event_res_df, site_res_df, rem_res_df, bias_std_df = run_mera(
 )
 
 # Save the results
-event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
-site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
-rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
-bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
+results.event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
+results.event_cond_std_df.to_csv(
+    output_dir / "event_cond_std.csv", index_label="event_id"
+)
+results.rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
+results.bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
+results.fit_df.to_csv(output_dir / "fit.csv", index_label="gm_id")
+
+if compute_site_term:
+    results.site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
+
+    results.site_cond_std_df.to_csv(
+        output_dir / "station_cond_std.csv", index_label="stat_id"
+    )

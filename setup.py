@@ -8,6 +8,7 @@ setup(
     description="Code for GM prediction mixed-effects regression analysis",
     install_requires=[
         "numpy==1.26.4",
+        "scipy",
         "statsmodels",
         "natsort",
         "pandas",

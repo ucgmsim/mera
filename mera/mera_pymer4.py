@@ -104,25 +104,8 @@ def run_mera(
 
     Returns
     -------
-<<<<<<< HEAD
-    event_res_df: dataframe
-        Contains the random effect for each event (rows) and IM (columns)
-    site_res_df: dataframe
-        Contains the random effect for each site (rows) and IM (columns)
-        Note: Only returned if compute_site_term is True
-    rem_res_df: dataframe
-        Contains the leftover residuals for
-        each record (rows) and IM (columns)
-    bias_std_df: dataframe
-        Contains bias, between-event sigma (tau),
-        between-site sigma (phi_S2S) (only when compute_site_term is True),
-        remaining residual sigma (phi_w) and total sigma (sigma) (columns)
-        per IM (rows)
-        Note: The bias column will be nan if assume_biased is False
-=======
     MeraResults:
         Results of the mixed-effects regression analysis
->>>>>>> main
     """
 
     # Result dataframes
@@ -253,10 +236,7 @@ def run_mera(
             # Get bias
             if assume_biased:
                 bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
-<<<<<<< HEAD
-=======
                 bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
->>>>>>> main
 
             # Get standard deviations
             bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]

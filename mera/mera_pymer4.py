@@ -288,6 +288,8 @@ def run_mera(
                 rem_res_df.loc[mask[cur_im], cur_im] = cur_model.residuals
                 fit_df.loc[mask[cur_im], cur_im] = cur_model.fits
 
+
+
             # Get bias
             if assume_biased:
                 bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
@@ -310,6 +312,11 @@ def run_mera(
 
         else:
             print("WARNING: No data for IM, skipping...")
+
+    # Add event and site columns to remaining residual
+    assert rem_res_df.sort_index().index.equals(residual_df.sort_index().index)
+    rem_res_df[event_cname] = residual_df[event_cname]
+    rem_res_df[site_cname] = residual_df[site_cname]
 
     # Compute total sigma and return
     if compute_site_term:

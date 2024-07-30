@@ -109,7 +109,7 @@ def run_mera(
     site_cname: str,
     assume_biased: bool = True,
     compute_site_term: bool = True,
-    mask: pd.DataFrame = None,
+    mask: Optional[pd.DataFrame] = None,
     verbose: bool = True,
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,

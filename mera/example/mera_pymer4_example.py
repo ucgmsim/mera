@@ -87,17 +87,4 @@ results = run_mera(
 )
 
 # Save the results
-results.event_res_df.to_csv(output_dir / "event_residuals.csv", index_label="event_id")
-results.event_cond_std_df.to_csv(
-    output_dir / "event_cond_std.csv", index_label="event_id"
-)
-results.rem_res_df.to_csv(output_dir / "remaining_residuals.csv", index_label="gm_id")
-results.bias_std_df.to_csv(output_dir / "bias_std.csv", index_label="IM")
-results.fit_df.to_csv(output_dir / "fit.csv", index_label="gm_id")
-
-if compute_site_term:
-    results.site_res_df.to_csv(output_dir / "site_residuals.csv", index_label="stat_id")
-
-    results.site_cond_std_df.to_csv(
-        output_dir / "station_cond_std.csv", index_label="stat_id"
-    )
+results.save(output_dir)

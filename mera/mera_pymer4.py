@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import natsort
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import dataclass
 
 from pymer4.models import Lmer
 
@@ -46,6 +48,59 @@ class MeraResults:
     site_res_df: Optional[pd.DataFrame]
     site_cond_std_df: Optional[pd.DataFrame]
 
+    def save(self, output_dir: Path):
+        """
+        Saves the MeraResults to the given directory
+
+        Parameters
+        ----------
+        output_dir: Path
+            Directory to save the MeraResults files
+        """
+        self.event_res_df.to_csv(output_dir / "event_res_df.csv")
+        self.event_cond_std_df.to_csv(output_dir / "event_cond_std_df.csv")
+        self.rem_res_df.to_csv(output_dir / "rem_res_df.csv")
+        self.bias_std_df.to_csv(output_dir / "bias_std_df.csv")
+        self.fit_df.to_csv(output_dir / "fit_df.csv")
+
+        if self.site_res_df is not None:
+            self.site_res_df.to_csv(output_dir / "site_res_df.csv")
+        if self.site_cond_std_df is not None:
+            self.site_cond_std_df.to_csv(output_dir / "site_cond_std_df.csv")
+
+    @classmethod
+    def load(cls, data_dir: Path):
+        """
+        Loads the MeraResults from the given directory
+
+        Parameters
+        ----------
+        data_dir: Path
+            Directory containing the MeraResults files
+
+        Returns
+        -------
+        MeraResults:
+            Loaded MeraResults
+        """
+        return cls(
+            pd.read_csv(data_dir / "event_res_df.csv", index_col=0),
+            pd.read_csv(data_dir / "event_cond_std_df.csv", index_col=0),
+            pd.read_csv(data_dir / "rem_res_df.csv", index_col=0),
+            pd.read_csv(data_dir / "bias_std_df.csv", index_col=0),
+            pd.read_csv(data_dir / "fit_df.csv", index_col=0),
+            (
+                pd.read_csv(data_dir / "site_res_df.csv", index_col=0)
+                if (data_dir / "site_res_df.csv").exists()
+                else None
+            ),
+            (
+                pd.read_csv(data_dir / "site_cond_std_df.csv", index_col=0)
+                if (data_dir / "site_cond_std_df.csv").exists()
+                else None
+            ),
+        )
+
 
 def run_mera(
     residual_df: pd.DataFrame,
@@ -54,7 +109,7 @@ def run_mera(
     site_cname: str,
     assume_biased: bool = True,
     compute_site_term: bool = True,
-    mask: pd.DataFrame = Optional[pd.DataFrame],
+    mask: Optional[pd.DataFrame] = None,
     verbose: bool = True,
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
@@ -93,6 +148,7 @@ def run_mera(
         Mask dataframe the size of the residual dataframe
         which selects which values are being used per IM
         for the lmer model. If None then all values are used.
+        Masked out record & IM combinations will be NaN in the output.
     verbose: bool, default = True
         If true then prints the progress of the analysis
     raise_warnings: bool, default = True
@@ -131,12 +187,15 @@ def run_mera(
     )
 
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
+    rem_res_df[event_cname] = residual_df[event_cname]
+    rem_res_df[site_cname] = residual_df[site_cname]
 
     fit_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
 
     bias_std_df = pd.DataFrame(
         index=ims,
         columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
+        data=np.full((len(ims), 6), np.nan),
         dtype=float,
     )
 

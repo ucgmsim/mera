@@ -47,6 +47,8 @@ class MeraResults:
     fit_df: pd.DataFrame
     site_res_df: Optional[pd.DataFrame]
     site_cond_std_df: Optional[pd.DataFrame]
+    cluster_res_df: Optional[pd.DataFrame]
+    cluster_cond_std_df: Optional[pd.DataFrame]
 
     def save(self, output_dir: Path):
         """
@@ -67,6 +69,12 @@ class MeraResults:
             self.site_res_df.to_csv(output_dir / "site_res_df.csv")
         if self.site_cond_std_df is not None:
             self.site_cond_std_df.to_csv(output_dir / "site_cond_std_df.csv")
+
+        # Cluster ouputs
+        if self.cluster_res_df is not None:
+            self.cluster_res_df.to_csv(output_dir / "cluster_res_df.csv")
+        if self.cluster_cond_std_df is not None:
+            self.cluster_cond_std_df.to_csv(output_dir / "cluster_cond_std_df.csv")
 
     @classmethod
     def load(cls, data_dir: Path):
@@ -99,6 +107,17 @@ class MeraResults:
                 if (data_dir / "site_cond_std_df.csv").exists()
                 else None
             ),
+            # Cluster ouputs
+            (
+                pd.read_csv(data_dir / "cluster_res_df.csv", index_col=0)
+                if (data_dir / "cluster_res_df.csv").exists()
+                else None
+            ),
+            (
+                pd.read_csv(data_dir / "cluster_cond_std_df.csv", index_col=0)
+                if (data_dir / "cluster_cond_std_df.csv").exists()
+                else None
+            ),
         )
 
 
@@ -108,7 +127,9 @@ def run_mera(
     event_cname: str,
     site_cname: str,
     assume_biased: bool = True,
+    cluster_cname: str = None,
     compute_site_term: bool = True,
+    compute_cluster_term: bool = False,
     mask: Optional[pd.DataFrame] = None,
     verbose: bool = True,
     raise_warnings: bool = True,
@@ -180,6 +201,15 @@ def run_mera(
             dtype=float,
         )
 
+    if compute_cluster_term:
+        cluster_cond_std_df = pd.DataFrame(
+            index=natsort.natsorted(
+                np.unique(residual_df[cluster_cname].values.astype(str))
+            ),
+            columns=ims,
+            dtype=float,
+        )
+
     event_cond_std_df = pd.DataFrame(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
         columns=ims,
@@ -189,13 +219,14 @@ def run_mera(
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
     rem_res_df[event_cname] = residual_df[event_cname]
     rem_res_df[site_cname] = residual_df[site_cname]
+    rem_res_df[cluster_cname] = residual_df[cluster_cname]
 
     fit_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
 
     bias_std_df = pd.DataFrame(
         index=ims,
-        columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
-        data=np.full((len(ims), 6), np.nan),
+        columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_C2C", "phi_w", "sigma"],
+        data=np.full((len(ims), 7), np.nan),
         dtype=float,
     )
 
@@ -205,6 +236,12 @@ def run_mera(
             index=np.unique(residual_df[site_cname].values.astype(str)), columns=ims
         )
         random_effects_columns.append(site_cname)
+    
+    if compute_cluster_term:
+        cluster_res_df = pd.DataFrame(
+            index=np.unique(residual_df[cluster_cname].values.astype(str)), columns=ims
+        )
+        random_effects_columns.append(cluster_cname)
 
     for cur_ix, cur_im in enumerate(ims):
         if verbose:
@@ -243,8 +280,53 @@ def run_mera(
 
         # Create and fit the model
         if len(cur_residual_df) > 0:
+
+            # With site and cluster terms
+            if compute_site_term and compute_cluster_term:
+                cur_model = Lmer(
+                    f"{cur_im} ~ {'1' if assume_biased else '0'} + (1|{event_cname}) + (1|{site_cname}) + (1|{cluster_cname})",
+                    data=cur_residual_df,
+                )
+                cur_model.fit(summary=False)
+
+                # Get the site and event random effects
+                # (Ensure we extract the right dataframe with correct indexes)
+                event_index = (
+                    0
+                    if np.any(cur_model.ranef[0].index.isin(event_res_df.index))
+                    else 1
+                )
+                site_index = (
+                    1 if np.any(cur_model.ranef[1].index.isin(site_res_df.index)) else 0
+                )
+                cluster_index = (
+                    2 if np.any(cur_model.ranef[2].index.isin(cluster_res_df.index)) else 0
+                )
+                event_re = cur_model.ranef[event_index].iloc[:, 0]
+                site_re = cur_model.ranef[site_index].iloc[:, 0]
+                cluster_re = cur_model.ranef[cluster_index].iloc[:, 0]
+                print('cur_model.ranef', cur_model.ranef)
+                print('event_index', event_index)
+                print('site_index', site_index)
+                print('cluster_index', cluster_index)
+                print('event_re:', event_re)
+                print('site_re:', site_re)
+                print('cluster_re:', cluster_re)
+
+                # Get site term and standard deviation
+                site_res_df.loc[site_re.index, cur_im] = site_re
+                bias_std_df.loc[cur_im, "phi_S2S"] = cur_model.ranef_var.loc[
+                    site_cname, "Std"
+                ]
+
+                # Get cluster term and standard deviation
+                cluster_res_df.loc[cluster_re.index, cur_im] = cluster_re
+                bias_std_df.loc[cur_im, "phi_C2C"] = cur_model.ranef_var.loc[
+                    cluster_cname, "Std"
+                ]
+
             # With site-term
-            if compute_site_term:
+            elif compute_site_term:
                 cur_model = Lmer(
                     f"{cur_im} ~ {'1' if assume_biased else '0'} + (1|{event_cname}) + (1|{site_cname})",
                     data=cur_residual_df,
@@ -308,14 +390,38 @@ def run_mera(
 
             event_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
 
-            if compute_site_term:
+            if compute_site_term and compute_cluster_term:
                 site_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+                cluster_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+            elif compute_site_term:
+                site_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
+            elif compute_cluster_term:
+                cluster_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
 
         else:
             print("WARNING: No data for IM, skipping...")
 
     # Compute total sigma and return
-    if compute_site_term:
+    if compute_site_term and compute_cluster_term:
+        bias_std_df["sigma"] = (
+            bias_std_df["tau"] ** 2
+            + bias_std_df["phi_S2S"] ** 2
+            + bias_std_df["phi_C2C"] ** 2
+            + bias_std_df["phi_w"] ** 2
+        ) ** (1 / 2)
+        return MeraResults(
+            event_res_df,
+            event_cond_std_df,
+            rem_res_df,
+            bias_std_df,
+            fit_df,
+            site_res_df,
+            site_cond_std_df,
+            cluster_res_df,
+            cluster_cond_std_df,
+        )
+
+    elif compute_site_term:
         bias_std_df["sigma"] = (
             bias_std_df["tau"] ** 2
             + bias_std_df["phi_S2S"] ** 2
@@ -330,6 +436,7 @@ def run_mera(
             site_res_df,
             site_cond_std_df,
         )
+
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
         bias_std_df["sigma"] = (

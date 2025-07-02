@@ -1,0 +1,15 @@
+### Potential of using the new Pymer4 (version 0.9.2)
+
+Pymer4 version 0.9.2 can derive confidence intervals via bootstrapping 
+for fitted fixed-effects, and the standard deviation of all random-effects.
+
+While this is a significant development it does not provide per-station and per-event
+confidence intervals, so it cannot replace the existing solution offered by [our fork 
+of Pymer4](https://github.com/ucgmsim/pymer4/tree/get_ranef_cond_std).
+
+The per-station and per-event random effect values provided by MERA are formally 
+called _conditional modes_, or _Best Linear Unbiased Predictors (BLUPs)_
+, so we require confidence intervals (CIs) for the BLUPs. 
+A [comment](https://github.com/ejolly/pymer4/blob/2f5b405f87516928c399e7b49be4f7c683250e5e/pymer4/tidystats/lmerTest.py#L61C1-L61C60) in `pymer4/tidystats/lmerTest.py` on line 61 of 
+`# TODO: Add support for returning coef(model) for BLUPs CIs` suggests that the
+developers may eventually add this feature.

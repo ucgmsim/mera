@@ -1,4 +1,5 @@
 from pathlib import Path
+import multiprocessing as mp
 
 import natsort
 import numpy as np
@@ -114,6 +115,7 @@ def run_mera(
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
     min_num_records_per_site: int = 3,
+    n_procs: int = 1,
 ) -> MeraResults:
     """
     Runs mixed effects regression analysis for the given
@@ -157,6 +159,8 @@ def run_mera(
         The minimum number of records per event required to keep the records.
     min_num_records_per_site : int, default = 3
         The minimum number of records per site required to keep the records.
+    n_procs: int, default = 1
+        Number of processors to use.
 
     Returns
     -------
@@ -167,53 +171,56 @@ def run_mera(
     if compute_site_term:
         random_effects_columns.append(site_cname)
 
-    event_res_df, event_cond_std_df = [], []
-    rem_res_df, bias_std_df, fit_df = [], [], []
-    if compute_site_term:
-        site_res_df, site_cond_std_df = [], []
-    for cur_ix, cur_im in enumerate(ims):
-        if verbose:
-            print(f"Processing IM {cur_im}, {cur_ix + 1}/{len(ims)}")
+    results = []
+    if n_procs == 1:
+        for cur_ix, cur_im in enumerate(ims):
+            if verbose:
+                print(f"Processing IM {cur_im}, {cur_ix + 1}/{len(ims)}")
 
-        (
-            event_res_series,
-            event_cond_std_series,
-            cur_rem_res_df,
-            bias_std_series,
-            fit_series,
-            site_res_series,
-            site_cond_std_series,
-        ) = _run_im_mera(
-            residual_df,
-            cur_im,
-            event_cname,
-            site_cname if compute_site_term else None,
-            assume_biased,
-            min_num_records_per_event,
-            min_num_records_per_site,
-            random_effects_columns,
-            mask,
-            raise_warnings,
-        )
+            cur_result = _run_im_mera(
+                residual_df,
+                cur_im,
+                event_cname,
+                site_cname if compute_site_term else None,
+                assume_biased,
+                min_num_records_per_event,
+                min_num_records_per_site,
+                random_effects_columns,
+                mask,
+                raise_warnings,
+            )
+            results.append(cur_result)
+    else:
+        with mp.Pool(processes=n_procs) as pool:
+            results = pool.starmap(
+                _run_im_mera,
+                [
+                    (
+                        residual_df,
+                        cur_im,
+                        event_cname,
+                        site_cname if compute_site_term else None,
+                        assume_biased,
+                        min_num_records_per_event,
+                        min_num_records_per_site,
+                        random_effects_columns,
+                        mask,
+                        raise_warnings,
+                    )
+                    for cur_im in ims
+                ],
+            )
 
-        event_res_df.append(event_res_series)
-        event_cond_std_df.append(event_cond_std_series)
-        rem_res_df.append(cur_rem_res_df)
-        bias_std_df.append(bias_std_series)
-        fit_df.append(fit_series)
-        if compute_site_term:
-            site_res_df.append(site_res_series)
-            site_cond_std_df.append(site_cond_std_series)
-
-    event_res_df = pd.concat(event_res_df, axis=1)
-    event_cond_std_df = pd.concat(event_cond_std_df, axis=1)
+    # Unpack results
+    event_res_df = pd.concat([cur_result[0] for cur_result in results], axis=1)
+    event_cond_std_df = pd.concat([cur_result[1] for cur_result in results], axis=1)
     event_cond_std_df.columns = ims
-    rem_res_df = pd.concat(rem_res_df, axis=1)
-    bias_std_df = pd.DataFrame(bias_std_df, index=ims)
-    fit_df = pd.concat(fit_df, axis=1)
+    rem_res_df = pd.concat([cur_result[2] for cur_result in results], axis=1)
+    bias_std_df = pd.DataFrame([cur_result[3] for cur_result in results], index=ims)
+    fit_df = pd.concat([cur_result[4] for cur_result in results], axis=1)
     if compute_site_term:
-        site_res_df = pd.concat(site_res_df, axis=1)
-        site_cond_std_df = pd.concat(site_cond_std_df, axis=1)
+        site_res_df = pd.concat([cur_result[5] for cur_result in results], axis=1)
+        site_cond_std_df = pd.concat([cur_result[6] for cur_result in results], axis=1)
         site_cond_std_df.columns = ims
 
     # Compute total sigma and return
@@ -260,6 +267,7 @@ def _run_im_mera(
     mask: pd.DataFrame | None,
     raise_warnings: bool,
 ):
+    """Helper function to run mera for a single IM"""
     # Filter on the mask if given
     cur_columns = [im] + random_effects_columns
     cur_residual_df = (
@@ -285,8 +293,6 @@ def _run_im_mera(
         )
         for label, count in warning_counts.items():
             print(f"Warning: For IM {im}, {label} has only {count} records.")
-
-
 
     # Result series
     event_res_series = pd.Series(
@@ -329,7 +335,6 @@ def _run_im_mera(
             dtype=float,
         )
 
-
     # Check for nans
     if cur_residual_df[im].isna().sum() > 0:
         raise ValueError(f"NaNs found in IM {im}")
@@ -347,7 +352,9 @@ def _run_im_mera(
             # Get the site and event random effects
             # (Ensure we extract the right dataframe with correct indexes)
             event_index = (
-                0 if np.any(cur_model.ranef[0].index.isin(event_res_series.index)) else 1
+                0
+                if np.any(cur_model.ranef[0].index.isin(event_res_series.index))
+                else 1
             )
             site_index = (
                 1 if np.any(cur_model.ranef[1].index.isin(site_res_series.index)) else 0
@@ -393,7 +400,9 @@ def _run_im_mera(
         cur_model.ranef_df.set_index("grp", inplace=True)
         cur_model.ranef_df.index.rename(None, inplace=True)
 
-        event_cond_std_series.loc[cur_event_ids] = cur_model.ranef_df.loc[cur_event_ids, "condsd"]
+        event_cond_std_series.loc[cur_event_ids] = cur_model.ranef_df.loc[
+            cur_event_ids, "condsd"
+        ]
         if site_cname is not None:
             site_cond_std_series.loc[cur_site_ids] = (
                 cur_model.ranef_df.loc[cur_site_ids, "condsd"]

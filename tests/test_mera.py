@@ -7,6 +7,7 @@ import mera
 
 MASK = pd.read_csv(Path(__file__).parent / "resources" / "mask.csv", index_col=0)
 
+
 @pytest.fixture(scope="module")
 def obs_sim_df():
     # Load the data
@@ -27,9 +28,10 @@ def ims(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame]):
         cur_im
         for cur_im in np.intersect1d(obs_df.columns, sim_df.columns)
         if cur_im.startswith("pSA")
-    ][::3]  
+    ][::3]
 
     return ims
+
 
 @pytest.fixture(scope="module")
 def res_df(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame], ims: list[str]):
@@ -59,7 +61,7 @@ def res_df(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame], ims: list[str]):
 
 @pytest.fixture(scope="module", params=[True, False])
 def mask(request: pytest.FixtureRequest, res_df: pd.DataFrame):
-    if request.param: 
+    if request.param:
         return mera.mask_too_few_records(
             res_df,
             mask=MASK,
@@ -68,7 +70,7 @@ def mask(request: pytest.FixtureRequest, res_df: pd.DataFrame):
             min_num_records_per_event=3,
             min_num_records_per_site=3,
         )
-    else: 
+    else:
         return None
 
 
@@ -81,7 +83,15 @@ def expected(mask: pd.DataFrame | None):
 
     return mera.MeraResults.load(residuals_dir)
 
-def test_mera(res_df: pd.DataFrame, ims: list[str], expected: mera.MeraResults, mask: pd.DataFrame | None):
+
+@pytest.mark.parametrize("n_procs", [1, 2])
+def test_mera(
+    res_df: pd.DataFrame,
+    ims: list[str],
+    expected: mera.MeraResults,
+    mask: pd.DataFrame | None,
+    n_procs: int,
+):
     result = mera.run_mera(
         res_df,
         list(ims),
@@ -93,14 +103,26 @@ def test_mera(res_df: pd.DataFrame, ims: list[str], expected: mera.MeraResults, 
         raise_warnings=True,
         min_num_records_per_event=3,
         min_num_records_per_site=3,
+        n_procs=n_procs,
     )
 
-    atol=1e-4
-    pd.testing.assert_frame_equal(result.event_res_df[ims], expected.event_res_df[ims], atol=atol)
-    pd.testing.assert_frame_equal(result.event_cond_std_df[ims], expected.event_cond_std_df[ims], atol=atol)
-    pd.testing.assert_frame_equal(result.rem_res_df[ims], expected.rem_res_df[ims], atol=atol)
-    pd.testing.assert_frame_equal(result.bias_std_df.loc[ims], expected.bias_std_df.loc[ims], atol=atol)
+    atol = 1e-4
+    pd.testing.assert_frame_equal(
+        result.event_res_df[ims], expected.event_res_df[ims], atol=atol
+    )
+    pd.testing.assert_frame_equal(
+        result.event_cond_std_df[ims], expected.event_cond_std_df[ims], atol=atol
+    )
+    pd.testing.assert_frame_equal(
+        result.rem_res_df[ims], expected.rem_res_df[ims], atol=atol
+    )
+    pd.testing.assert_frame_equal(
+        result.bias_std_df.loc[ims], expected.bias_std_df.loc[ims], atol=atol
+    )
     pd.testing.assert_frame_equal(result.fit_df[ims], expected.fit_df[ims], atol=atol)
-    pd.testing.assert_frame_equal(result.site_res_df[ims], expected.site_res_df[ims], atol=atol)
-    pd.testing.assert_frame_equal(result.site_cond_std_df[ims], expected.site_cond_std_df[ims], atol=atol)
-
+    pd.testing.assert_frame_equal(
+        result.site_res_df[ims], expected.site_res_df[ims], atol=atol
+    )
+    pd.testing.assert_frame_equal(
+        result.site_cond_std_df[ims], expected.site_cond_std_df[ims], atol=atol
+    )

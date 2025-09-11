@@ -21,6 +21,9 @@ test = [
   "pytest",
 ]
 
+[tool.deptry]
+ignore_unused = ["pytest"]
+
 [tool.ruff.lint.isort]
 known-first-party = [
   "source_modelling",

@@ -14,8 +14,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Install R
+      - name: Install R and system dependencies
         run: sudo apt-get update && sudo apt-get install -y r-base r-base-dev libtirpc-dev
+      - name: Install R packages
+        run: |
+          sudo R -e "install.packages(c('lme4', 'lmerTest'), repos='https://cloud.r-project.org')"
 
       - name: Define a cache dependency glob
         uses: astral-sh/setup-uv@v5

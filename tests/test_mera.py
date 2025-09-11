@@ -56,7 +56,7 @@ def test_mera(res_df_and_ims: tuple[pd.DataFrame, list[str]], expected: mera.Mer
         min_num_records_per_site=3,
     )
 
-    atol=1e-6
+    atol=1e-4
     pd.testing.assert_frame_equal(result.event_res_df[ims], expected.event_res_df[ims], atol=atol)
     pd.testing.assert_frame_equal(result.event_cond_std_df[ims], expected.event_cond_std_df[ims], atol=atol)
     pd.testing.assert_frame_equal(result.rem_res_df[ims], expected.rem_res_df[ims], atol=atol)

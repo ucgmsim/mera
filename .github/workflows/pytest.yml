@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install R
-        run: sudo apt-get update && sudo apt-get install -y r-base r-base-dev
+        run: sudo apt-get update && sudo apt-get install -y r-base r-base-dev libtirpc-dev
 
       - name: Define a cache dependency glob
         uses: astral-sh/setup-uv@v5

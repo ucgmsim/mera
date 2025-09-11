@@ -14,6 +14,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: Install R
+        run: sudo apt-get update && sudo apt-get install -y r-base r-base-dev
 
       - name: Define a cache dependency glob
         uses: astral-sh/setup-uv@v5
@@ -27,4 +29,4 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          pytest 
+          pytest

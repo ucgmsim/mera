@@ -290,44 +290,44 @@ def _run_im_mera(
 
     # Result series
     event_res_series = pd.Series(
-        index=np.unique(cur_residual_df[event_cname].values.astype(str)),
+        index=np.unique(residual_df[event_cname].values.astype(str)),
         dtype=float,
         name=im,
     )
-    event_ids = natsort.natsorted(
+    event_cond_std_series = pd.Series(
+        index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
+        # columns=ims,
+        dtype=float,
+    )
+    cur_event_ids = natsort.natsorted(
         np.unique(cur_residual_df[event_cname].values.astype(str))
     )
-    # event_cond_std_df = pd.Series(
-    #     index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
-    #     # columns=ims,
-    #     dtype=float,
-    # )
     bias_std_series = pd.Series(
         index=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
         data=np.nan,
         dtype=float,
         name=im,
     )
-    rem_res_df = pd.DataFrame(index=cur_residual_df.index.values, columns=[im], dtype=float)
-    rem_res_df[event_cname] = cur_residual_df[event_cname]
-    rem_res_df[site_cname] = cur_residual_df[site_cname]
-    fit_series = pd.Series(index=cur_residual_df.index.values, dtype=float, name=im)
+    rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=[im], dtype=float)
+    rem_res_df[event_cname] = residual_df[event_cname]
+    rem_res_df[site_cname] = residual_df[site_cname]
+    fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series = None
     if site_cname is not None:
         site_res_series = pd.Series(
-            index=np.unique(cur_residual_df[site_cname].values.astype(str)),
+            index=np.unique(residual_df[site_cname].values.astype(str)),
             dtype=float,
             name=im,
         )
-        site_ids = natsort.natsorted(
+        cur_site_ids = natsort.natsorted(
             np.unique(cur_residual_df[site_cname].values.astype(str))
         )
-        # site_cond_std_df = pd.Series(
-        #     index=natsort.natsorted(
-        #         np.unique(residual_df[site_cname].values.astype(str))
-        #     ),
-        #     dtype=float,
-        # )
+        site_cond_std_series = pd.Series(
+            index=natsort.natsorted(
+                np.unique(residual_df[site_cname].values.astype(str))
+            ),
+            dtype=float,
+        )
 
 
     # Check for nans
@@ -393,12 +393,13 @@ def _run_im_mera(
         cur_model.ranef_df.set_index("grp", inplace=True)
         cur_model.ranef_df.index.rename(None, inplace=True)
 
-        event_cond_std_series = cur_model.ranef_df.loc[event_ids, "condsd"]
-        site_cond_std_series = (
-            cur_model.ranef_df.loc[site_ids, "condsd"]
-            if site_cname is not None
-            else None
-        )
+        event_cond_std_series.loc[cur_event_ids] = cur_model.ranef_df.loc[cur_event_ids, "condsd"]
+        if site_cname is not None:
+            site_cond_std_series.loc[cur_site_ids] = (
+                cur_model.ranef_df.loc[cur_site_ids, "condsd"]
+                if site_cname is not None
+                else None
+            )
 
         return (
             event_res_series,

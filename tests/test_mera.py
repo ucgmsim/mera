@@ -22,11 +22,12 @@ def obs_sim_df():
 def ims(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame]):
     obs_df, sim_df = obs_sim_df
 
+    # Use every third period to speed up the test
     ims = [
         cur_im
         for cur_im in np.intersect1d(obs_df.columns, sim_df.columns)
         if cur_im.startswith("pSA")
-    ][::3]  # Use every third period to speed up the test
+    ][::3]  
 
     return ims
 
@@ -73,7 +74,10 @@ def mask(request: pytest.FixtureRequest, res_df: pd.DataFrame):
 
 @pytest.fixture(scope="module")
 def expected(mask: pd.DataFrame | None):
-    residuals_dir = Path(__file__).parent / "residuals"
+    if mask is None:
+        residuals_dir = Path(__file__).parent / "resources/no_mask"
+    else:
+        residuals_dir = Path(__file__).parent / "resources/mask"
 
     return mera.MeraResults.load(residuals_dir)
 

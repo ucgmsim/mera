@@ -38,9 +38,9 @@ def mask_too_few_records(
     mask: pd.DataFrame
         Mask DataFrame with the same shape as the given residual DataFrame.
     """
-
     # making a copy to ensure that the original DataFrame is not modified
     residual_df = residual_df.copy()
+    mask = mask.copy() if mask is not None else None
 
     ims = residual_df.columns.drop([event_cname, site_cname])
 

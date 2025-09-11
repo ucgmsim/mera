@@ -109,7 +109,7 @@ def run_mera(
     site_cname: str,
     assume_biased: bool = True,
     compute_site_term: bool = True,
-    mask: Optional[pd.DataFrame] = None,
+    mask: pd.DataFrame | None = None,
     verbose: bool = True,
     raise_warnings: bool = True,
     min_num_records_per_event: int = 3,
@@ -163,156 +163,58 @@ def run_mera(
     MeraResults:
         Results of the mixed-effects regression analysis
     """
-
-    # Result dataframes
-    event_res_df = pd.DataFrame(
-        index=np.unique(residual_df[event_cname].values.astype(str)),
-        columns=ims,
-        dtype=float,
-    )
-
-    if compute_site_term:
-        site_cond_std_df = pd.DataFrame(
-            index=natsort.natsorted(
-                np.unique(residual_df[site_cname].values.astype(str))
-            ),
-            columns=ims,
-            dtype=float,
-        )
-
-    event_cond_std_df = pd.DataFrame(
-        index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
-        columns=ims,
-        dtype=float,
-    )
-
-    rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
-    rem_res_df[event_cname] = residual_df[event_cname]
-    rem_res_df[site_cname] = residual_df[site_cname]
-
-    fit_df = pd.DataFrame(index=residual_df.index.values, columns=ims, dtype=float)
-
-    bias_std_df = pd.DataFrame(
-        index=ims,
-        columns=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
-        data=np.full((len(ims), 6), np.nan),
-        dtype=float,
-    )
-
     random_effects_columns = [event_cname]
     if compute_site_term:
-        site_res_df = pd.DataFrame(
-            index=np.unique(residual_df[site_cname].values.astype(str)), columns=ims, dtype=float
-        )
         random_effects_columns.append(site_cname)
 
+    event_res_df, event_cond_std_df = [], []
+    rem_res_df, bias_std_df, fit_df = [], [], []
+    if compute_site_term:
+        site_res_df, site_cond_std_df = [], []
     for cur_ix, cur_im in enumerate(ims):
         if verbose:
             print(f"Processing IM {cur_im}, {cur_ix + 1}/{len(ims)}")
 
-        # Filter on the mask if given
-        cur_columns = [cur_im] + random_effects_columns
-        cur_residual_df = (
-            residual_df[cur_columns]
-            if mask is None
-            else residual_df[cur_columns].loc[mask[cur_im]]
+        (
+            event_res_series,
+            event_cond_std_series,
+            cur_rem_res_df,
+            bias_std_series,
+            fit_series,
+            site_res_series,
+            site_cond_std_series,
+        ) = _run_im_mera(
+            residual_df,
+            cur_im,
+            event_cname,
+            site_cname if compute_site_term else None,
+            assume_biased,
+            min_num_records_per_event,
+            min_num_records_per_site,
+            random_effects_columns,
+            mask,
+            raise_warnings,
         )
 
-        if raise_warnings:
-            count_per_event = cur_residual_df.groupby(event_cname).count()[cur_im]
-            count_per_site = (
-                cur_residual_df.groupby(site_cname).count()[cur_im]
-                if compute_site_term
-                else pd.Series()
-            )
+        event_res_df.append(event_res_series)
+        event_cond_std_df.append(event_cond_std_series)
+        rem_res_df.append(cur_rem_res_df)
+        bias_std_df.append(bias_std_series)
+        fit_df.append(fit_series)
+        if compute_site_term:
+            site_res_df.append(site_res_series)
+            site_cond_std_df.append(site_cond_std_series)
 
-            warning_counts = pd.concat(
-                [
-                    count_per_event[count_per_event < min_num_records_per_event],
-                    count_per_site[count_per_site < min_num_records_per_site],
-                ],
-                axis=0,
-            )
-
-            for label, count in warning_counts.items():
-                print(f"Warning: For IM {cur_im}, {label} has only {count} records.")
-
-        # Check for nans
-        if cur_residual_df[cur_im].isna().sum() > 0:
-            raise ValueError(f"NaNs found in IM {cur_im}")
-
-        # Create and fit the model
-        if len(cur_residual_df) > 0:
-            # With site-term
-            if compute_site_term:
-                cur_model = Lmer(
-                    f"{cur_im} ~ {'1' if assume_biased else '0'} + (1|{event_cname}) + (1|{site_cname})",
-                    data=cur_residual_df,
-                )
-                cur_model.fit(summary=False)
-
-                # Get the site and event random effects
-                # (Ensure we extract the right dataframe with correct indexes)
-                event_index = (
-                    0
-                    if np.any(cur_model.ranef[0].index.isin(event_res_df.index))
-                    else 1
-                )
-                site_index = (
-                    1 if np.any(cur_model.ranef[1].index.isin(site_res_df.index)) else 0
-                )
-                event_re = cur_model.ranef[event_index].iloc[:, 0]
-                site_re = cur_model.ranef[site_index].iloc[:, 0]
-
-                # Get site term and standard deviation
-                site_res_df.loc[site_re.index, cur_im] = site_re
-                bias_std_df.loc[cur_im, "phi_S2S"] = cur_model.ranef_var.loc[
-                    site_cname, "Std"
-                ]
-
-            # Without site-term
-            else:
-                cur_model = Lmer(
-                    f"{cur_im} ~ {'1' if assume_biased else '0'} + (1|{event_cname})",
-                    data=cur_residual_df,
-                )
-                cur_model.fit(summary=False)
-
-                # Get the event term
-                # (Ensure we extract the right dataframe with correct indexes)
-                event_re = cur_model.ranef.iloc[:, 0]
-
-            # Get event and remaining terms
-            event_res_df.loc[event_re.index, cur_im] = event_re
-            if mask is None:
-                rem_res_df[cur_im] = cur_model.residuals
-                fit_df[cur_im] = cur_model.fits
-            else:
-                rem_res_df.loc[mask[cur_im], cur_im] = cur_model.residuals
-                fit_df.loc[mask[cur_im], cur_im] = cur_model.fits
-
-            # Get bias
-            if assume_biased:
-                bias_std_df.loc[cur_im, "bias"] = cur_model.coefs.iloc[0, 0]
-                bias_std_df.loc[cur_im, "bias_std_err"] = cur_model.coefs["SE"].iloc[0]
-
-            # Get standard deviations
-            bias_std_df.loc[cur_im, "tau"] = cur_model.ranef_var.loc[event_cname, "Std"]
-            bias_std_df.loc[cur_im, "phi_w"] = cur_model.ranef_var.loc[
-                "Residual", "Std"
-            ]
-
-            # set the index of ranef_df so it matches those of the output DataFrames
-            cur_model.ranef_df.set_index("grp", inplace=True)
-            cur_model.ranef_df.index.rename(None, inplace=True)
-
-            event_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
-
-            if compute_site_term:
-                site_cond_std_df[cur_im] = cur_model.ranef_df["condsd"]
-
-        else:
-            print("WARNING: No data for IM, skipping...")
+    event_res_df = pd.concat(event_res_df, axis=1)
+    event_cond_std_df = pd.concat(event_cond_std_df, axis=1)
+    event_cond_std_df.columns = ims
+    rem_res_df = pd.concat(rem_res_df, axis=1)
+    bias_std_df = pd.DataFrame(bias_std_df, index=ims)
+    fit_df = pd.concat(fit_df, axis=1)
+    if compute_site_term:
+        site_res_df = pd.concat(site_res_df, axis=1)
+        site_cond_std_df = pd.concat(site_cond_std_df, axis=1)
+        site_cond_std_df.columns = ims
 
     # Compute total sigma and return
     if compute_site_term:
@@ -344,3 +246,169 @@ def run_mera(
             None,
             None,
         )
+
+
+def _run_im_mera(
+    residual_df: pd.DataFrame,
+    im: str,
+    event_cname: str,
+    site_cname: str,
+    assume_biased: bool,
+    min_num_records_per_event: int,
+    min_num_records_per_site: int,
+    random_effects_columns: list[str],
+    mask: pd.DataFrame | None,
+    raise_warnings: bool,
+):
+    # Filter on the mask if given
+    cur_columns = [im] + random_effects_columns
+    cur_residual_df = (
+        residual_df[cur_columns]
+        if mask is None
+        else residual_df[cur_columns].loc[mask[im]]
+    )
+
+    # Generate warnings for insufficient records per event or site
+    if raise_warnings:
+        count_per_event = cur_residual_df.groupby(event_cname).count()[im]
+        count_per_site = (
+            cur_residual_df.groupby(site_cname).count()[im]
+            if site_cname is not None
+            else pd.Series()
+        )
+        warning_counts = pd.concat(
+            [
+                count_per_event[count_per_event < min_num_records_per_event],
+                count_per_site[count_per_site < min_num_records_per_site],
+            ],
+            axis=0,
+        )
+        for label, count in warning_counts.items():
+            print(f"Warning: For IM {im}, {label} has only {count} records.")
+
+
+
+    # Result series
+    event_res_series = pd.Series(
+        index=np.unique(cur_residual_df[event_cname].values.astype(str)),
+        dtype=float,
+        name=im,
+    )
+    event_ids = natsort.natsorted(
+        np.unique(cur_residual_df[event_cname].values.astype(str))
+    )
+    # event_cond_std_df = pd.Series(
+    #     index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
+    #     # columns=ims,
+    #     dtype=float,
+    # )
+    bias_std_series = pd.Series(
+        index=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
+        data=np.nan,
+        dtype=float,
+        name=im,
+    )
+    rem_res_df = pd.DataFrame(index=cur_residual_df.index.values, columns=[im], dtype=float)
+    rem_res_df[event_cname] = cur_residual_df[event_cname]
+    rem_res_df[site_cname] = cur_residual_df[site_cname]
+    fit_series = pd.Series(index=cur_residual_df.index.values, dtype=float, name=im)
+    site_res_series = None
+    if site_cname is not None:
+        site_res_series = pd.Series(
+            index=np.unique(cur_residual_df[site_cname].values.astype(str)),
+            dtype=float,
+            name=im,
+        )
+        site_ids = natsort.natsorted(
+            np.unique(cur_residual_df[site_cname].values.astype(str))
+        )
+        # site_cond_std_df = pd.Series(
+        #     index=natsort.natsorted(
+        #         np.unique(residual_df[site_cname].values.astype(str))
+        #     ),
+        #     dtype=float,
+        # )
+
+
+    # Check for nans
+    if cur_residual_df[im].isna().sum() > 0:
+        raise ValueError(f"NaNs found in IM {im}")
+
+    # Create and fit the model
+    if len(cur_residual_df) > 0:
+        # With site-term
+        if site_cname is not None:
+            cur_model = Lmer(
+                f"{im} ~ {'1' if assume_biased else '0'} + (1|{event_cname}) + (1|{site_cname})",
+                data=cur_residual_df,
+            )
+            cur_model.fit(summary=False)
+
+            # Get the site and event random effects
+            # (Ensure we extract the right dataframe with correct indexes)
+            event_index = (
+                0 if np.any(cur_model.ranef[0].index.isin(event_res_series.index)) else 1
+            )
+            site_index = (
+                1 if np.any(cur_model.ranef[1].index.isin(site_res_series.index)) else 0
+            )
+            event_re = cur_model.ranef[event_index].iloc[:, 0]
+            site_re = cur_model.ranef[site_index].iloc[:, 0]
+
+            # Get site term and standard deviation
+            site_res_series.loc[site_re.index] = site_re
+            bias_std_series.loc["phi_S2S"] = cur_model.ranef_var.loc[site_cname, "Std"]
+
+        # Without site-term
+        else:
+            cur_model = Lmer(
+                f"{im} ~ {'1' if assume_biased else '0'} + (1|{event_cname})",
+                data=cur_residual_df,
+            )
+            cur_model.fit(summary=False)
+
+            # Get the event term
+            # (Ensure we extract the right dataframe with correct indexes)
+            event_re = cur_model.ranef.iloc[:, 0]
+
+        # Get event and remaining terms
+        event_res_series.loc[event_re.index] = event_re
+        if mask is None:
+            rem_res_df[im] = cur_model.residuals
+            fit_series.values[:] = list(cur_model.fits)
+        else:
+            rem_res_df.loc[mask[im], im] = cur_model.residuals
+            fit_series.loc[mask[im]] = list(cur_model.fits)
+
+        # Get bias
+        if assume_biased:
+            bias_std_series.loc["bias"] = cur_model.coefs.iloc[0, 0]
+            bias_std_series.loc["bias_std_err"] = cur_model.coefs["SE"].iloc[0]
+
+        # Get standard deviations
+        bias_std_series.loc["tau"] = cur_model.ranef_var.loc[event_cname, "Std"]
+        bias_std_series.loc["phi_w"] = cur_model.ranef_var.loc["Residual", "Std"]
+
+        # set the index of ranef_df so it matches those of the output DataFrames
+        cur_model.ranef_df.set_index("grp", inplace=True)
+        cur_model.ranef_df.index.rename(None, inplace=True)
+
+        event_cond_std_series = cur_model.ranef_df.loc[event_ids, "condsd"]
+        site_cond_std_series = (
+            cur_model.ranef_df.loc[site_ids, "condsd"]
+            if site_cname is not None
+            else None
+        )
+
+        return (
+            event_res_series,
+            event_cond_std_series,
+            rem_res_df,
+            bias_std_series,
+            fit_series,
+            site_res_series,
+            site_cond_std_series,
+        )
+    else:
+        print("WARNING: No data for IM {im}, skipping...")
+        return None

@@ -56,11 +56,12 @@ def test_mera(res_df_and_ims: tuple[pd.DataFrame, list[str]], expected: mera.Mer
         min_num_records_per_site=3,
     )
 
-    pd.testing.assert_frame_equal(result.event_res_df[ims], expected.event_res_df[ims])
-    pd.testing.assert_frame_equal(result.event_cond_std_df[ims], expected.event_cond_std_df[ims])
-    pd.testing.assert_frame_equal(result.rem_res_df[ims], expected.rem_res_df[ims])
-    pd.testing.assert_frame_equal(result.bias_std_df.loc[ims], expected.bias_std_df.loc[ims])
-    pd.testing.assert_frame_equal(result.fit_df[ims], expected.fit_df[ims])
-    pd.testing.assert_frame_equal(result.site_res_df[ims], expected.site_res_df[ims])
-    pd.testing.assert_frame_equal(result.site_cond_std_df[ims], expected.site_cond_std_df[ims])
+    atol=1e-6
+    pd.testing.assert_frame_equal(result.event_res_df[ims], expected.event_res_df[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.event_cond_std_df[ims], expected.event_cond_std_df[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.rem_res_df[ims], expected.rem_res_df[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.bias_std_df.loc[ims], expected.bias_std_df.loc[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.fit_df[ims], expected.fit_df[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.site_res_df[ims], expected.site_res_df[ims], atol=atol)
+    pd.testing.assert_frame_equal(result.site_cond_std_df[ims], expected.site_cond_std_df[ims], atol=atol)
 

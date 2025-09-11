@@ -202,7 +202,7 @@ def run_mera(
     random_effects_columns = [event_cname]
     if compute_site_term:
         site_res_df = pd.DataFrame(
-            index=np.unique(residual_df[site_cname].values.astype(str)), columns=ims
+            index=np.unique(residual_df[site_cname].values.astype(str)), columns=ims, dtype=float
         )
         random_effects_columns.append(site_cname)
 

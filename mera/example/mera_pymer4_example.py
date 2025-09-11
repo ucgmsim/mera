@@ -2,8 +2,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from mera import utils
-from mera.mera_pymer4 import run_mera
+import mera
 
 # Load the data
 data_dir = Path(__file__).parent / "resources"
@@ -11,13 +10,8 @@ output_dir = Path(__file__).parent / "residuals"
 
 output_dir.mkdir(exist_ok=True)
 
-stations_ffp = data_dir / "stations.csv"
-events_ffp = data_dir / "events.csv"
 obs_ffp = data_dir / "im_obs.csv"
 sim_ffp = data_dir / "im_sim.csv"
-
-stations_df = pd.read_csv(stations_ffp, index_col=0)
-events_df = pd.read_csv(events_ffp, index_col=0)
 
 obs_df = pd.read_csv(obs_ffp, index_col=0)
 sim_df = pd.read_csv(sim_ffp, index_col=0)
@@ -60,7 +54,7 @@ mask = pd.DataFrame(
 )
 
 # Optional: Mask out records without sufficient records per station/event.
-mask = utils.mask_too_few_records(
+mask = mera.mask_too_few_records(
     res_df,
     mask=mask,
     event_cname="event_id",
@@ -73,7 +67,7 @@ mask = utils.mask_too_few_records(
 compute_site_term = True
 
 # # Run MER
-results = run_mera(
+results = mera.run_mera(
     res_df,
     list(ims),
     "event_id",

@@ -1,12 +1,13 @@
 from pathlib import Path
 import multiprocessing as mp
+from dataclasses import dataclass
 
 import natsort
 import numpy as np
 import pandas as pd
 from typing import Optional
-from dataclasses import dataclass
 
+import rpy2.robjects.conversion as cv
 from pymer4.models import Lmer
 
 
@@ -189,7 +190,7 @@ def run_mera(
             )
             results.append(cur_result)
     else:
-        with mp.Pool(processes=n_procs, maxtasksperchild=1) as pool:
+        with mp.Pool(processes=n_procs, maxtasksperchild=1, initializer=_init_worker) as pool:
             results = pool.starmap(
                 _run_im_mera,
                 [
@@ -436,3 +437,13 @@ def _run_im_mera(
         "site_res_series": site_res_series,
         "site_cond_std_series": site_cond_std_series,
     }
+
+
+def _init_worker():
+    """Initialize R conversion context for multiprocessing workers"""
+    try:
+        from rpy2.robjects import default_converter
+
+        cv.set_conversion(default_converter)
+    except ImportError:
+        pass

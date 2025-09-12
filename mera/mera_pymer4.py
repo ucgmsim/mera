@@ -211,15 +211,25 @@ def run_mera(
             )
 
     # Unpack results
-    event_res_df = pd.concat([cur_result['event_res_series'] for cur_result in results], axis=1)
-    event_cond_std_df = pd.concat([cur_result['event_cond_std_series'] for cur_result in results], axis=1)
+    event_res_df = pd.concat(
+        [cur_result["event_res_series"] for cur_result in results], axis=1
+    )
+    event_cond_std_df = pd.concat(
+        [cur_result["event_cond_std_series"] for cur_result in results], axis=1
+    )
     event_cond_std_df.columns = ims
-    rem_res_df = pd.concat([cur_result['rem_res_df'] for cur_result in results], axis=1)
-    bias_std_df = pd.DataFrame([cur_result['bias_std_series'] for cur_result in results], index=ims)
-    fit_df = pd.concat([cur_result['fit_series'] for cur_result in results], axis=1)
+    rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)
+    bias_std_df = pd.DataFrame(
+        [cur_result["bias_std_series"] for cur_result in results], index=ims
+    )
+    fit_df = pd.concat([cur_result["fit_series"] for cur_result in results], axis=1)
     if compute_site_term:
-        site_res_df = pd.concat([cur_result['site_res_series'] for cur_result in results], axis=1)
-        site_cond_std_df = pd.concat([cur_result['site_cond_std_series'] for cur_result in results], axis=1)
+        site_res_df = pd.concat(
+            [cur_result["site_res_series"] for cur_result in results], axis=1
+        )
+        site_cond_std_df = pd.concat(
+            [cur_result["site_cond_std_series"] for cur_result in results], axis=1
+        )
         site_cond_std_df.columns = ims
 
     # Compute total sigma and return
@@ -290,7 +300,9 @@ def _run_im_mera(
 
     # Generate warnings for insufficient records per event or site
     if raise_warnings:
-        count_per_event = cur_residual_df.groupby(event_cname, observed=True).count()[im]
+        count_per_event = cur_residual_df.groupby(event_cname, observed=True).count()[
+            im
+        ]
         count_per_site = (
             cur_residual_df.groupby(site_cname).count()[im]
             if site_cname is not None
@@ -416,11 +428,11 @@ def _run_im_mera(
         print(f"Finished processing {im}")
 
     return {
-        'event_res_series': event_res_series,
-        'event_cond_std_series': event_cond_std_series,
-        'rem_res_df': rem_res_df,
-        'bias_std_series': bias_std_series,
-        'fit_series': fit_series,
-        'site_res_series': site_res_series,
-        'site_cond_std_series': site_cond_std_series,
+        "event_res_series": event_res_series,
+        "event_cond_std_series": event_cond_std_series,
+        "rem_res_df": rem_res_df,
+        "bias_std_series": bias_std_series,
+        "fit_series": fit_series,
+        "site_res_series": site_res_series,
+        "site_cond_std_series": site_cond_std_series,
     }

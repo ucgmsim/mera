@@ -75,7 +75,9 @@ def mask_too_few_records(
 
         # Use transform on the groupby object to create a mask of the same shape as the original DataFrame.
         drop_mask = (
-            residual_df[mask].groupby(event_cname, observed=True).transform("count")[ims]
+            residual_df[mask]
+            .groupby(event_cname, observed=True)
+            .transform("count")[ims]
             < min_num_records_per_event
         ) | (
             residual_df[mask].groupby(site_cname, observed=True).transform("count")[ims]

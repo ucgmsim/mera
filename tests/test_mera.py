@@ -38,8 +38,7 @@ def res_df(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame], ims: list[str]):
     obs_df, sim_df = obs_sim_df
 
     pd.testing.assert_frame_equal(
-        obs_df[['event_id', 'stat_id']],
-        sim_df[['event_id', 'stat_id']]
+        obs_df[["event_id", "stat_id"]], sim_df[["event_id", "stat_id"]]
     )
 
     # Compute the residual

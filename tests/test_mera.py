@@ -37,13 +37,10 @@ def ims(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame]):
 def res_df(obs_sim_df: tuple[pd.DataFrame, pd.DataFrame], ims: list[str]):
     obs_df, sim_df = obs_sim_df
 
-    assert (
-        np.all(obs_df.index == sim_df.index)
-        and np.all(obs_df.event_id == sim_df.event_id)
-        and np.all(obs_df.stat_id == sim_df.stat_id)
+    pd.testing.assert_frame_equal(
+        obs_df[['event_id', 'stat_id']],
+        sim_df[['event_id', 'stat_id']]
     )
-
-    # ims = [cur_im for cur_im in np.intersect1d(obs_df.columns, sim_df.columns) if cur_im.startswith("pSA")][::3]
 
     # Compute the residual
     res_df = np.log(obs_df[ims] / sim_df[ims])
@@ -70,17 +67,12 @@ def mask(request: pytest.FixtureRequest, res_df: pd.DataFrame):
             min_num_records_per_event=3,
             min_num_records_per_site=3,
         )
-    else:
-        return None
 
 
 @pytest.fixture(scope="module")
 def expected(mask: pd.DataFrame | None):
-    if mask is None:
-        residuals_dir = Path(__file__).parent / "resources/no_mask"
-    else:
-        residuals_dir = Path(__file__).parent / "resources/mask"
-
+    mask_suffix = "mask" if mask is not None else "no_mask"
+    residuals_dir = Path(__file__).parent / "resources" / mask_suffix
     return mera.MeraResults.load(residuals_dir)
 
 

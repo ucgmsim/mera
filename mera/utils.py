@@ -64,7 +64,6 @@ def mask_too_few_records(
     mask[site_cname] = True
 
     while True:
-
         assert all(
             mask[event_cname] == True
         ), "event_cname column in mask must be all True so that residual_df[mask] includes those columns for groupby"
@@ -76,10 +75,10 @@ def mask_too_few_records(
 
         # Use transform on the groupby object to create a mask of the same shape as the original DataFrame.
         drop_mask = (
-            residual_df[mask].groupby(event_cname).transform("count")[ims]
+            residual_df[mask].groupby(event_cname, observed=True).transform("count")[ims]
             < min_num_records_per_event
         ) | (
-            residual_df[mask].groupby(site_cname).transform("count")[ims]
+            residual_df[mask].groupby(site_cname, observed=True).transform("count")[ims]
             < min_num_records_per_site
         )
 

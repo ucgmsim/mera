@@ -50,7 +50,7 @@ class MeraResults:
     site_res_df: Optional[pd.DataFrame]
     site_cond_std_df: Optional[pd.DataFrame]
 
-    def save(self, output_dir: Path, save_fit: bool = True):
+    def save(self, output_dir: Path, save_fit: bool = True, save_rem: bool = True):
         """
         Saves the MeraResults to the given directory
 
@@ -61,8 +61,9 @@ class MeraResults:
         """
         self.event_res_df.to_csv(output_dir / "event_res_df.csv")
         self.event_cond_std_df.to_csv(output_dir / "event_cond_std_df.csv")
-        self.rem_res_df.to_csv(output_dir / "rem_res_df.csv")
         self.bias_std_df.to_csv(output_dir / "bias_std_df.csv")
+        if save_rem:
+            self.rem_res_df.to_csv(output_dir / "rem_res_df.csv")
         if save_fit and self.fit_df is not None:
             self.fit_df.to_csv(output_dir / "fit_df.csv")
 
@@ -89,8 +90,12 @@ class MeraResults:
         return cls(
             pd.read_csv(data_dir / "event_res_df.csv", index_col=0),
             pd.read_csv(data_dir / "event_cond_std_df.csv", index_col=0),
-            pd.read_csv(data_dir / "rem_res_df.csv", index_col=0),
             pd.read_csv(data_dir / "bias_std_df.csv", index_col=0),
+            (
+                pd.read_csv(data_dir / "rem_res_df.csv", index_col=0)
+                if (data_dir / "rem_res_df.csv").exists()
+                else None
+            ),
             (
                 pd.read_csv(data_dir / "fit_df.csv", index_col=0)
                 if (data_dir / "fit_df.csv").exists()
@@ -108,7 +113,9 @@ class MeraResults:
             ),
         )
 
-    def save_to_parquet(self, output_dir: Path, save_fit: bool = True):
+    def save_to_parquet(
+        self, output_dir: Path, save_fit: bool = True, save_rem: bool = True
+    ):
         """
         Saves the MeraResults to the given directory in parquet format
 
@@ -119,8 +126,9 @@ class MeraResults:
         """
         self.event_res_df.to_parquet(output_dir / "event_res_df.parquet")
         self.event_cond_std_df.to_parquet(output_dir / "event_cond_std_df.parquet")
-        self.rem_res_df.to_parquet(output_dir / "rem_res_df.parquet")
         self.bias_std_df.to_parquet(output_dir / "bias_std_df.parquet")
+        if save_rem and self.rem_res_df is not None:
+            self.rem_res_df.to_parquet(output_dir / "rem_res_df.parquet")
         if save_fit and self.fit_df is not None:
             self.fit_df.to_parquet(output_dir / "fit_df.parquet")
 
@@ -146,8 +154,12 @@ class MeraResults:
         return cls(
             pd.read_parquet(data_dir / "event_res_df.parquet"),
             pd.read_parquet(data_dir / "event_cond_std_df.parquet"),
-            pd.read_parquet(data_dir / "rem_res_df.parquet"),
             pd.read_parquet(data_dir / "bias_std_df.parquet"),
+            (
+                pd.read_parquet(data_dir / "rem_res_df.parquet")
+                if (data_dir / "rem_res_df.parquet").exists()
+                else None
+            ),
             (
                 pd.read_parquet(data_dir / "fit_df.parquet")
                 if (data_dir / "fit_df.parquet").exists()

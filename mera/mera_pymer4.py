@@ -103,6 +103,58 @@ class MeraResults:
             ),
         )
 
+    def save_to_parquet(self, output_dir: Path):
+        """
+        Saves the MeraResults to the given directory in parquet format
+
+        Parameters
+        ----------
+        output_dir: Path
+            Directory to save the MeraResults files
+        """
+        self.event_res_df.to_parquet(output_dir / "event_res_df.parquet")
+        self.event_cond_std_df.to_parquet(output_dir / "event_cond_std_df.parquet")
+        self.rem_res_df.to_parquet(output_dir / "rem_res_df.parquet")
+        self.bias_std_df.to_parquet(output_dir / "bias_std_df.parquet")
+        self.fit_df.to_parquet(output_dir / "fit_df.parquet")
+
+        if self.site_res_df is not None:
+            self.site_res_df.to_parquet(output_dir / "site_res_df.parquet")
+        if self.site_cond_std_df is not None:
+            self.site_cond_std_df.to_parquet(output_dir / "site_cond_std_df.parquet")
+
+    def load_from_parquet(cls, data_dir: Path):
+        """
+        Loads the MeraResults from the given directory in parquet format
+
+        Parameters
+        ----------
+        data_dir: Path
+            Directory containing the MeraResults files
+
+        Returns
+        -------
+        MeraResults:
+            Loaded MeraResults
+        """
+        return cls(
+            pd.read_parquet(data_dir / "event_res_df.parquet"),
+            pd.read_parquet(data_dir / "event_cond_std_df.parquet"),
+            pd.read_parquet(data_dir / "rem_res_df.parquet"),
+            pd.read_parquet(data_dir / "bias_std_df.parquet"),
+            pd.read_parquet(data_dir / "fit_df.parquet"),
+            (
+                pd.read_parquet(data_dir / "site_res_df.parquet")
+                if (data_dir / "site_res_df.parquet").exists()
+                else None
+            ),
+            (
+                pd.read_parquet(data_dir / "site_cond_std_df.parquet")
+                if (data_dir / "site_cond_std_df.parquet").exists()
+                else None
+            ),
+        )
+
 
 def run_mera(
     residual_df: pd.DataFrame,
@@ -190,7 +242,9 @@ def run_mera(
             )
             results.append(cur_result)
     else:
-        with mp.Pool(processes=n_procs, maxtasksperchild=1, initializer=_init_worker) as pool:
+        with mp.Pool(
+            processes=n_procs, maxtasksperchild=1, initializer=_init_worker
+        ) as pool:
             results = pool.starmap(
                 _run_im_mera,
                 [
@@ -220,6 +274,7 @@ def run_mera(
     )
     event_cond_std_df.columns = ims
     rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)
+    rem_res_df[event_cname] = residual_df[event_cname]
     bias_std_df = pd.DataFrame(
         [cur_result["bias_std_series"] for cur_result in results], index=ims
     )
@@ -340,7 +395,7 @@ def _run_im_mera(
         name=im,
     )
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=[im], dtype=float)
-    rem_res_df[event_cname] = residual_df[event_cname]
+    # rem_res_df[event_cname] = residual_df[event_cname]
     fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series, site_cond_std_series = None, None
     if site_cname is not None:

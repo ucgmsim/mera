@@ -90,12 +90,12 @@ class MeraResults:
         return cls(
             pd.read_csv(data_dir / "event_res_df.csv", index_col=0),
             pd.read_csv(data_dir / "event_cond_std_df.csv", index_col=0),
-            pd.read_csv(data_dir / "bias_std_df.csv", index_col=0),
             (
                 pd.read_csv(data_dir / "rem_res_df.csv", index_col=0)
                 if (data_dir / "rem_res_df.csv").exists()
                 else None
             ),
+            pd.read_csv(data_dir / "bias_std_df.csv", index_col=0),
             (
                 pd.read_csv(data_dir / "fit_df.csv", index_col=0)
                 if (data_dir / "fit_df.csv").exists()
@@ -154,12 +154,12 @@ class MeraResults:
         return cls(
             pd.read_parquet(data_dir / "event_res_df.parquet"),
             pd.read_parquet(data_dir / "event_cond_std_df.parquet"),
-            pd.read_parquet(data_dir / "bias_std_df.parquet"),
             (
                 pd.read_parquet(data_dir / "rem_res_df.parquet")
                 if (data_dir / "rem_res_df.parquet").exists()
                 else None
             ),
+            pd.read_parquet(data_dir / "bias_std_df.parquet"),
             (
                 pd.read_parquet(data_dir / "fit_df.parquet")
                 if (data_dir / "fit_df.parquet").exists()

@@ -14,6 +14,7 @@ dependencies = [
   "pandas",
   "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
   "natsort",
+  "rpy2",
 ]
 
 [project.optional-dependencies]

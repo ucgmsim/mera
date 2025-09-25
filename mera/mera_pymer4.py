@@ -404,7 +404,6 @@ def _run_im_mera(
     )
     event_cond_std_series = pd.Series(
         index=natsort.natsorted(np.unique(residual_df[event_cname].values.astype(str))),
-        # columns=ims,
         dtype=float,
     )
     cur_event_ids = natsort.natsorted(
@@ -417,7 +416,6 @@ def _run_im_mera(
         name=im,
     )
     rem_res_df = pd.DataFrame(index=residual_df.index.values, columns=[im], dtype=float)
-    # rem_res_df[event_cname] = residual_df[event_cname]
     fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series, site_cond_std_series = None, None
     if site_cname is not None:

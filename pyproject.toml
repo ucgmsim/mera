@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mera"
+authors = [{ name = "QuakeCoRE" }]
+description = "Mixed-effects regression analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+  "numpy",
+  "pandas",
+  "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
+  "natsort",
+  "rpy2",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+  "source_modelling",
+  "workflow",
+  "pygmt_helper",
+  "qcore",
+  "empirical",
+  "nshmdb",
+  "IM_calculation",
+  "mera",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore no docstring in __init__.py
+"__init__.py" = ["D104"]
+# Ignore docstring errors in tests folder
+"tests/**.py" = ["D"]
+
+
+[tool.numpydoc_validation]
+checks = [
+  "GL05",
+  "GL08",
+  "GL10",
+  "PR01",
+  "PR02",
+  "PR03",
+  "PR04",
+  "PR05",
+  "PR06",
+  "PR07",
+  "RT01",
+  "RT02",
+  "RT03",
+  "RT04",
+  "YD01",
+]
+# remember to use single quotes for regex in TOML
+exclude = [ # don't report on objects that match any of these regex
+  '\.undocumented_method$',
+  '\.__repr__$',
+]

@@ -1,6 +1,6 @@
 name: Deptry Dependency Check
 
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   test:
@@ -14,4 +14,4 @@ jobs:
       # Install deptry
       - run: pip install deptry
       # Run deptry to check that all dependencies are present.
-      - run: deptry .
+      - run: deptry . -ddg test

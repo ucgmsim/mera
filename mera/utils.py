@@ -12,7 +12,8 @@ def mask_too_few_records(
     min_num_records_per_site: int = 3,
 ) -> pd.DataFrame:
     """
-    Creates a boolean mask (or modifies one passed in) that removes records without sufficient records per station/event.
+    Creates a boolean mask (or modifies one passed in) that removes 
+    records without sufficient records per station/event.
     Note: This is done independently per IM.
 
     Parameters

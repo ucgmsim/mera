@@ -125,8 +125,7 @@ class MeraResults:
             Directory to save the MeraResults files
         """
         self.event_res_df.to_parquet(output_dir / "event_res_df.parquet")
-        if self.event_cond_std_df is not None:
-            self.event_cond_std_df.to_parquet(output_dir / "event_cond_std_df.parquet")
+        self.event_cond_std_df.to_parquet(output_dir / "event_cond_std_df.parquet")
         self.bias_std_df.to_parquet(output_dir / "bias_std_df.parquet")
         if save_rem and self.rem_res_df is not None:
             self.rem_res_df.to_parquet(output_dir / "rem_res_df.parquet")
@@ -297,9 +296,9 @@ def run_mera(
     )
     event_cond_std_df.columns = ims
     rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)
-    rem_res_df[event_cname] = residual_df[event_cname]
+    rem_res_df[event_cname] = residual_df.loc[rem_res_df.index, event_cname]
     if compute_site_term:
-        rem_res_df[site_cname] = residual_df[site_cname]
+        rem_res_df[site_cname] = residual_df.loc[rem_res_df.index, site_cname]
     bias_std_df = pd.DataFrame(
         [cur_result["bias_std_series"] for cur_result in results], index=ims
     )

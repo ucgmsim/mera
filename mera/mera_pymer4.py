@@ -296,7 +296,9 @@ def run_mera(
     )
     event_cond_std_df.columns = ims
     rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)
-    rem_res_df[event_cname] = residual_df[event_cname]
+    rem_res_df[event_cname] = residual_df.loc[rem_res_df.index, event_cname]
+    if compute_site_term:
+        rem_res_df[site_cname] = residual_df.loc[rem_res_df.index, site_cname]
     bias_std_df = pd.DataFrame(
         [cur_result["bias_std_series"] for cur_result in results], index=ims
     )
@@ -382,7 +384,7 @@ def _run_im_mera(
             im
         ]
         count_per_site = (
-            cur_residual_df.groupby(site_cname).count()[im]
+            cur_residual_df.groupby(site_cname, observed=True).count()[im]
             if site_cname is not None
             else pd.Series()
         )
@@ -419,7 +421,6 @@ def _run_im_mera(
     fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series, site_cond_std_series = None, None
     if site_cname is not None:
-        rem_res_df[site_cname] = residual_df[site_cname]
         site_res_series = pd.Series(
             index=np.unique(residual_df[site_cname].values.astype(str)),
             dtype=float,

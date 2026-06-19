@@ -137,6 +137,7 @@ class MeraResults:
         if self.site_cond_std_df is not None:
             self.site_cond_std_df.to_parquet(output_dir / "site_cond_std_df.parquet")
 
+    @classmethod
     def load_from_parquet(cls, data_dir: Path):
         """
         Loads the MeraResults from the given directory in parquet format

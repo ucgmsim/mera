@@ -13,9 +13,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
-      - name: Install R and system dependencies
-        run: sudo apt-get update && sudo apt-get install -y r-base r-base-dev libtirpc-dev
+          python-version: "3.13"
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libtirpc-dev
+        
       - name: Install R packages
         run: |
           sudo R -e "install.packages(c('lme4', 'lmerTest'), repos='https://cloud.r-project.org')"
@@ -27,6 +34,9 @@ jobs:
 
       - name: Install the project
         run: uv sync --all-extras --dev
+
+      - name: Reinstall rpy2 from source
+        run: uv pip install --reinstall rpy2 --no-binary rpy2 rpy2
 
       - name: Run tests
         run: |

@@ -33,7 +33,10 @@ jobs:
           enable-cache: true
 
       - name: Install the project
-        run: uv sync --all-extras --dev --reinstall-package rpy2 --no-binary rpy2
+        run: uv sync --all-extras --dev
+
+      - name: Reinstall rpy2 from source
+        run: uv pip install --reinstall rpy2 --no-binary rpy2 rpy2
 
       - name: Run tests
         run: |

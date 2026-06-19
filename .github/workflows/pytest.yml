@@ -33,9 +33,7 @@ jobs:
           enable-cache: true
 
       - name: Install the project
-        env:
-          UV_NO_BINARY: "rpy2"
-        run: uv sync --all-extras --dev --reinstall-package rpy2
+        run: uv sync --all-extras --dev --reinstall-package rpy2 --no-binary rpy2
 
       - name: Run tests
         run: |

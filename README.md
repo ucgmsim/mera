@@ -1,6 +1,6 @@
 ## Mixed Effects Regression Analysis
 
-Convience wrapper for running mixed-effects regression analysis for ground motion prediction models.
+Convenience wrapper for running mixed-effects regression analysis for ground motion prediction models.
 
 Uses the python wrapper package [pymer4](http://eshinjolly.com/pymer4/index.html), to make use of the R-package `lme4`.
 Note that a forked version of the wrapper is used, https://github.com/ucgmsim/pymer4/tree/get_ranef_cond_std (installed with the package)

@@ -293,7 +293,7 @@ def run_mera(
         [cur_result["event_res_series"] for cur_result in results], axis=1
     )
     event_cond_std_df = pd.concat(
-        [cur_result["event_cond_std_series"] for cur_result in results], axis=1 
+        [cur_result["event_cond_std_series"] for cur_result in results], axis=1
     )
     event_cond_std_df.columns = ims
     rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)

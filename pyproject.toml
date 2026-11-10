@@ -1,9 +1,10 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools", "setuptools-scm", "setuptools-rust>=1.1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mera"
+# The import name is mera; on PyPI, "mera" is another project.
+name = "ucgmsim-mera"
 authors = [{ name = "QuakeCoRE" }]
 description = "Mixed-effects regression analysis"
 readme = "README.md"
@@ -11,16 +12,80 @@ requires-python = ">=3.11"
 dynamic = ["version"]
 dependencies = [
   "numpy",
-  "pandas<3",
-  "pymer4 @ git+https://github.com/ucgmsim/pymer4.git@get_ranef_cond_std",
+  "pandas",
   "natsort",
-  "rpy2",
+  "scipy>=1.14",
 ]
 
 [project.optional-dependencies]
 test = [
   "pytest",
+  "pytest-cov",
+  "pyarrow",
 ]
+
+[dependency-groups]
+dev = ["deptry", "npdlint", "ruff", "ty"]
+
+[tool.setuptools_scm]
+
+[tool.setuptools.packages]
+find = { where = ["."], include = ["mera", "mera.*"] }
+
+[[tool.setuptools-rust.ext-modules]]
+target = "mera._lmm"
+path = "src-rust/Cargo.toml"
+binding = "PyO3"
+# Editable (in-place) installs would otherwise be debug builds, ~20x slower.
+debug = false
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.lock" },
+  { file = "**/Cargo.toml" },
+  { file = "**/*.rs" },
+]
+
+[tool.deptry]
+optional_dependencies_dev_groups = ["test"]
+# Manual scripts, not part of the package.
+extend_exclude = ["tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+# The guides: their code blocks are laid out for reading (comments aligned in columns),
+# which the formatter would undo.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+extend-select = [
+  # isort imports
+  "I",
+  # Use r'\s+' rather than '\s+'
+  "W605",
+  # All the naming errors, like using camel case for function names.
+  "N",
+  # Missing docstrings in classes, methods, and functions
+  "D101",
+  "D102",
+  "D103",
+  "D105",
+  "D107",
+  # Use f-string instead of a format call
+  "UP032",
+  # Standard library import is deprecated
+  "UP035",
+  # Missing function argument type-annotation
+  "ANN001",
+  # Using except without specifying an exception type to catch
+  "BLE001",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
 
 [tool.ruff.lint.isort]
 known-first-party = [
@@ -41,8 +106,11 @@ known-first-party = [
 "tests/**.py" = ["D"]
 
 
-[tool.numpydoc_validation]
-checks = [
+[tool.npdlint]
+include = ["mera"]
+extend-exclude = ["__init__.py"]
+numpydoc-compat = false
+select = [
   "GL05",
   "GL08",
   "GL10",
@@ -58,9 +126,4 @@ checks = [
   "RT03",
   "RT04",
   "YD01",
-]
-# remember to use single quotes for regex in TOML
-exclude = [ # don't report on objects that match any of these regex
-  '\.undocumented_method$',
-  '\.__repr__$',
 ]

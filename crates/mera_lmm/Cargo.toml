@@ -1,0 +1,15 @@
+[package]
+name = "mera_lmm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Profiled REML for linear mixed models with crossed random intercepts (mera's numerical core)"
+publish = false
+
+[dependencies]
+# Pure-Rust sparse Cholesky: no BLAS, no SuiteSparse.
+faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg"] }
+thiserror = "2"
+
+[lints]
+workspace = true

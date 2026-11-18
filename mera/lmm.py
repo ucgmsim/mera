@@ -78,7 +78,8 @@ class LmmFit:
         Residual standard deviation [``phi_w``]. This is not the total standard
         deviation, which mera's outputs also call sigma.
     beta : np.ndarray
-        Fixed effects: the intercept [``bias``] if one was fitted, otherwise empty.
+        Fixed effects: the intercept [``bias``] if one was fitted, then the coefficient
+        of each covariate, in the order of their columns. Empty if there are neither.
     beta_se : np.ndarray
         Standard errors of ``beta`` [``bias_std_err``].
     ranef : list of np.ndarray
@@ -89,7 +90,8 @@ class LmmFit:
         Conditional standard deviations of the random effects (conditional on ``beta``):
         how uncertain each term in ``ranef`` is, given the data.
     fitted : np.ndarray
-        Fitted values, fixed plus random effects, one per observation.
+        Fitted values, fixed plus random effects, one per observation. The fixed part
+        includes the covariates' trends.
     resid : np.ndarray
         ``y - fitted`` [the remaining residuals].
     deviance : float
@@ -131,6 +133,7 @@ def fit_lmm(
     intercept: bool = True,
     reml: bool = True,
     name: str | None = None,
+    covariates: npt.ArrayLike | None = None,
 ) -> LmmFit:
     """Fits a linear mixed model with crossed random intercepts.
 
@@ -148,6 +151,10 @@ def fit_lmm(
     name : str, optional
         What is being fitted (e.g. "IM PGA"), named in the warning if the optimiser does
         not converge and in a note on any error.
+    covariates : array-like, optional
+        More fixed effects: a column per covariate (such as magnitude, or the logarithm
+        of Vs30) and a row per observation, or a single covariate as a vector. Each gets
+        a coefficient in ``beta``, after the intercept.
 
     Returns
     -------
@@ -158,9 +165,11 @@ def fit_lmm(
     ------
     ValueError
         If the inputs are invalid (NaN or infinite values, missing group labels,
-        mismatched lengths, no grouping factor, a constant response), or if a grouping
+        mismatched lengths, no grouping factor, a constant response), if a grouping
         factor has a single level or as many levels as observations (designs lme4 also
-        refuses).
+        refuses), or if the fixed effects are collinear: one is an exact combination of
+        the others, as a covariate and the same covariate plus a constant are when there
+        is an intercept.
     RuntimeError
         If a matrix factorisation fails.
 
@@ -186,6 +195,11 @@ def fit_lmm(
     With an intercept, the fit is done on ``y`` less its mean, and the mean is added
     back to the intercept. This changes no result, and keeps the fit accurate however
     large the mean of ``y`` is compared with its spread.
+
+    Covariates are used as given. Subtracting a typical value from each (magnitude less
+    6, say) makes the intercept the mean at that value rather than at zero, changes
+    nothing else, and keeps the arithmetic accurate. ``docs/adding_models.md`` has more
+    advice on covariates, and on comparing models with and without one.
 
     The criterion does lose precision when a random-effect standard deviation is
     hundreds of times larger than the residual standard deviation: at a thousand times,
@@ -254,8 +268,30 @@ def fit_lmm(
         # x is the fixed-effects matrix X: a row per observation and a column per fixed
         # effect. A column of ones is the intercept, because it adds the same constant
         # (beta[0], the bias) to every observation. Without an intercept x has no
-        # columns. More columns would fit more fixed effects: see docs/adding_models.md.
+        # columns. Each covariate is one more column, with its own coefficient in beta.
         x = np.ones((y.size, int(intercept)))
+        if covariates is not None:
+            extra = np.asarray(covariates, dtype=float)
+            if extra.ndim == 1:
+                extra = extra[:, np.newaxis]  # a single covariate, given as a vector
+            if extra.ndim != 2:
+                raise ValueError(
+                    f"covariates must be at most two-dimensional, got shape {extra.shape}"
+                )
+            if extra.shape[0] != y.size:
+                raise ValueError(
+                    f"covariates need one row per observation ({y.size}), "
+                    f"got shape {extra.shape}"
+                )
+            x = np.column_stack([x, extra])
+            # If one column is an exact combination of the others, their coefficients
+            # cannot be told apart. The engine would then fail, or return meaningless
+            # coefficients with enormous standard errors, depending on rounding.
+            if np.all(np.isfinite(x)) and np.linalg.matrix_rank(x) < x.shape[1]:
+                raise ValueError(
+                    "the fixed effects are collinear: one column (the intercept or a "
+                    "covariate) is an exact combination of the others"
+                )
         # With an intercept, the engine is given y less its mean, and the mean is added
         # back to the intercept afterwards. Moving y by a constant changes nothing else
         # in a model with an intercept, and it keeps the arithmetic accurate: the engine

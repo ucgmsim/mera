@@ -35,9 +35,10 @@ each event".
 | no bias, or no site term | [1.1](#11-drop-the-bias-or-the-site-term) | an argument of `run_mera` |
 | a term for a third grouping (region, network, source zone, ...) | [1.2](#12-more-grouping-factors) | a call to `fit_lmm` |
 | a grouping inside another (stations within networks) | [1.3](#13-a-grouping-inside-another) | a call to `fit_lmm` |
-| maximum likelihood instead of REML | [1.4](#14-maximum-likelihood-and-comparing-models) | an argument of `fit_lmm` |
+| a trend with magnitude, distance, Vs30, ..., or an offset per site class | [1.4](#14-a-trend-with-a-covariate) | an argument of `fit_lmm` |
+| maximum likelihood instead of REML | [1.5](#15-maximum-likelihood-and-comparing-models) | an argument of `fit_lmm` |
 | an extra grouping reported in `run_mera`'s tables | [2.1](#21-report-another-grouping-factor-from-run_mera) | Python edits |
-| a trend with magnitude, distance, Vs30, ... | [2.2](#22-add-a-fixed-effect) | Python edits |
+| covariates in `run_mera`, for every IM | [2.2](#22-covariates-in-run_mera) | Python edits |
 | terms that vary with a covariate, unequal residual scatter, ... | [3](#3-what-would-need-the-rust-engine-changed) | Rust changes, or other software |
 
 ## 1. Without changing any code
@@ -106,12 +107,76 @@ station = res_df["network"].astype(str) + "/" + res_df["station"].astype(str)
 fit = fit_lmm(y, [res_df["event_id"], res_df["network"], station])
 ```
 
-### 1.4 Maximum likelihood, and comparing models
+### 1.4 A trend with a covariate
+
+Suppose the residuals trend with magnitude, and the model should be
+
+```
+residual = bias + slope × (magnitude − 6) + event term + site term + remaining residual
+```
+
+or `residual ~ 1 + magnitude + (1|event) + (1|site)`. The slope is a second fixed effect.
+`fit_lmm` takes any number of them as `covariates`: a column per covariate, with a row per
+record. A single covariate can be given as a plain array:
+
+```python
+fit = fit_lmm(y, [events, sites], covariates=magnitude - 6.0)
+bias, slope = fit.beta
+bias_std_err, slope_std_err = fit.beta_se
+```
+
+`fit.beta` and `fit.beta_se` hold the bias first, then a coefficient for each covariate in
+the order of the columns. The fitted values include the trend, so the event and site terms
+and the remaining residuals are what is left after it.
+
+Several covariates go side by side. A category, such as a site class, becomes one column
+of zeros and ones per class, for every class but one:
+
+```python
+covariates = np.column_stack(
+    [
+        magnitude - 6.0,
+        np.log(vs30 / 500.0),
+        site_class == "ridge",   # 1 for the records at ridge sites, 0 for the others
+        site_class == "valley",  # the remaining class, "flat", is the reference
+    ]
+)
+fit = fit_lmm(y, [events, sites], covariates=covariates)
+bias, magnitude_slope, vs30_slope, ridge_offset, valley_offset = fit.beta
+```
+
+The class that is left out is the reference: the bias is its mean, and the coefficient of
+each other class is the offset of that class from it. Giving every class a column, as well
+as a bias, is an error: the columns then add up to the column of ones that stands for the
+bias (they are *collinear*), and their coefficients cannot be told apart.
+
+Advice on covariates:
+
+- Subtract a typical value, as in `magnitude - 6.0`. The bias is then the average residual
+  at magnitude 6 rather than at magnitude 0. It also keeps the arithmetic accurate: a
+  covariate whose mean is thousands of times its spread, such as a year or a coordinate in
+  metres, costs digits: at ten thousand times, the standard deviations are good to about
+  five digits.
+- A covariate must vary, and must not be an exact combination of the other columns
+  (magnitude and magnitude + 1, with a bias, is one). `fit_lmm` stops with an error that
+  says the fixed effects are collinear. Covariates that are nearly, but not exactly, a
+  combination of each other are fitted, with coefficients that mean little and standard
+  errors that are enormous.
+- A covariate that is constant within each event, such as magnitude, competes with the
+  event terms: its coefficient is determined by the differences between events only.
+- To judge whether the trend is real, compare the coefficient with its standard error, or
+  compare the deviances of fits with and without it, both made with `reml=False`
+  ([1.5](#15-maximum-likelihood-and-comparing-models)).
+
+`run_mera` does not take covariates; [2.2](#22-covariates-in-run_mera) describes how to
+add them to it.
+
+### 1.5 Maximum likelihood, and comparing models
 
 `fit_lmm(..., reml=False)` fits by maximum likelihood (ML) instead of REML. REML gives
 better estimates of the standard deviations and is the right choice for reporting them.
 ML is needed for one thing: comparing two models that differ in their *fixed* effects, as
-in [2.2](#22-add-a-fixed-effect).
+in [1.4](#14-a-trend-with-a-covariate).
 
 `fit.deviance` is the criterion that the fit minimised, and for a given kind of fit the
 smaller it is the better the model describes the data. It can show whether an addition to
@@ -182,70 +247,21 @@ One more thing to watch: `mask_too_few_records` treats every column of the resid
 other than the event and site ids as an IM. Give it only those columns, for example
 `res_df[[*ims, "event_id", "stat_id"]]`, when the table has a region column too.
 
-### 2.2 Add a fixed effect
+### 2.2 Covariates in `run_mera`
 
-Suppose the residuals trend with magnitude, and the model should be
-
-```
-residual = bias + slope × (magnitude − 6) + event term + site term + remaining residual
-```
-
-or `residual ~ 1 + magnitude + (1|event) + (1|site)`. The slope is a second fixed effect.
-The engine fits any number of them: all it needs is one more column in the fixed-effects
-matrix `x`.
-
-`fit_lmm` builds `x` in its step 2, with only the column of ones:
-
-```python
-x = np.ones((y.size, int(intercept)))
-```
-
-To accept more columns, add an argument, for example
-`covariates: npt.ArrayLike | None = None`, and append it to `x`:
-
-```python
-x = np.ones((y.size, int(intercept)))
-if covariates is not None:
-    x = np.column_stack([x, np.asarray(covariates, dtype=float)])
-```
-
-Nothing else in `fit_lmm` has to change. `fit.beta` and `fit.beta_se` then have one entry
-per column of `x`: the bias first, then a coefficient for each covariate. The fitted
-values (`x @ beta` plus the random effects) include the trend, so the event and site terms
-and the remaining residuals are what is left after it.
-
-```python
-fit = fit_lmm(y, [events, sites], covariates=magnitude - 6.0)
-bias, slope = fit.beta
-bias_std_err, slope_std_err = fit.beta_se
-```
-
-For `run_mera` to do this for every IM, three places in `mera/analysis.py` change:
+`fit_lmm` already fits them ([1.4](#14-a-trend-with-a-covariate)). For `run_mera` to do so
+for every IM, three places in `mera/analysis.py` change:
 
 1. the `tasks` tuple in `run_mera` selects the columns that each fit receives
    (`residual_df[[cur_im, *random_effects_columns]]`): add the covariate columns;
 2. `cur_columns` at the top of `_run_im_mera` selects them again, before the mask is
    applied: add them there too, so that the covariates are masked with the IM, and pass
-   `cur_residual_df[covariate_columns].to_numpy()` to `fit_lmm`;
+   `covariates=cur_residual_df[covariate_columns].to_numpy()` to `fit_lmm`;
 3. the bias is stored in `bias_std_series` near the end of `_run_im_mera`: store
    `fit.beta[1:]` and `fit.beta_se[1:]` there as well, under names of your choice, and add
    those names to the index of `bias_std_series`.
 
 As in 2.1, keep covariate columns out of the table given to `mask_too_few_records`.
-
-Advice on covariates:
-
-- Subtract a typical value, as in `magnitude - 6.0`. The bias is then the average residual
-  at magnitude 6 rather than at magnitude 0, and the arithmetic is more accurate.
-- A covariate must vary, and must not be an exact combination of the other columns
-  (magnitude and magnitude + 1, with a bias, is one). Otherwise the fit either stops with
-  an error that says the fixed effects are collinear, or returns meaningless coefficients
-  with enormous standard errors.
-- A covariate that is constant within each event, such as magnitude, competes with the
-  event terms: its coefficient is determined by the differences between events only.
-- To judge whether the trend is real, compare the coefficient with its standard error, or
-  compare the deviances of fits with and without it, both made with `reml=False`
-  ([1.4](#14-maximum-likelihood-and-comparing-models)).
 
 ## 3. What would need the Rust engine changed
 
@@ -303,7 +319,7 @@ from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import fit_lmm
 
 groups = [events, sites, regions]
-x = np.ones((y.size, 1))  # the bias; add columns here for more fixed effects
+x = np.ones((y.size, 1))  # the bias; np.column_stack covariates on for more
 z, level_factor, levels = walkthrough.indicator_matrix(groups)
 model = walkthrough.Model(y, x, z, level_factor)
 dense = walkthrough.estimates(walkthrough.find_theta(model), model)
@@ -318,7 +334,7 @@ returns them in the layout of `fit_lmm`'s results (its `fit_lme4` function). It 
 the reference values of the test suite were made;
 `tests/resources/lme4_reference/README.md` describes the R setup. `fit_lme4` handles any
 number of grouping factors, but builds its formula with an intercept only: for a model
-with covariates ([2.2](#22-add-a-fixed-effect)), add them to the data frame and the
+with covariates ([1.4](#14-a-trend-with-a-covariate)), add them to the data frame and the
 formula in its `lmer` function.
 
 **Add a test.** `tests/test_lmm.py` has examples of each kind: against lme4's values,

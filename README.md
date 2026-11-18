@@ -219,9 +219,9 @@ Every function has a docstring, and the code is commented step by step.
 describes what else can be fitted and where in the source to change it:
 
 - without changing any code: no bias, no site term, extra or nested grouping factors
-  (regions, networks), maximum likelihood;
-- with small changes to the Python: extra terms in `run_mera`'s tables, and fixed effects
-  such as a trend with magnitude or distance;
+  (regions, networks), fixed effects such as a trend with magnitude, distance or Vs30,
+  maximum likelihood;
+- with small changes to the Python: extra terms and covariates in `run_mera`'s tables;
 - what would need the Rust engine changed, such as random slopes.
 
 ## Development

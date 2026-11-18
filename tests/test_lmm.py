@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from example_data import LME4_FITS, Lme4Fit, fit_inputs, groups_of, synthetic
 
+from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import LmmFit, fit_lmm
 
 
@@ -215,3 +216,112 @@ def test_errors_note_what_was_being_fitted() -> None:
         with pytest.raises(ValueError) as error:
             fit_lmm(y, [g], name="IM PGA")
         assert error.value.__notes__ == ["while fitting IM PGA"]
+
+
+def covariate_data() -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """A response with a trend in two covariates, its groups (events, sites) and the
+    covariates: one that is constant within an event, like magnitude, and one that
+    differs for every record, like distance."""
+    y, events, sites = walkthrough.make_example_data()
+    rng = np.random.default_rng(7)
+    event_levels, event_codes = np.unique(events, return_inverse=True)
+    magnitude = rng.uniform(-1.0, 1.0, size=event_levels.size)[event_codes]
+    distance = rng.normal(size=y.size)
+    covariates = np.column_stack([magnitude, distance])
+    return y + 0.3 * magnitude - 0.2 * distance, [events, sites], covariates
+
+
+@pytest.mark.parametrize("intercept", [True, False])
+def test_covariates_match_the_dense_implementation(intercept: bool) -> None:
+    """Fixed effects beside the bias: every result must equal that of the dense numpy
+    implementation, which is independent of the Rust engine."""
+    y, groups, covariates = covariate_data()
+    x = np.column_stack([np.ones((y.size, int(intercept))), covariates])
+    z, level_factor, _ = walkthrough.indicator_matrix(groups)
+    model = walkthrough.Model(y, x, z, level_factor)
+    dense = walkthrough.estimates(walkthrough.find_theta(model), model)
+
+    fit = fit_lmm(y, groups, intercept=intercept, covariates=covariates)
+
+    assert fit.converged
+    assert fit.beta.shape == fit.beta_se.shape == (int(intercept) + 2,)
+    assert fit.deviance == pytest.approx(dense.deviance, abs=1e-8)
+    np.testing.assert_allclose(fit.theta, dense.theta, atol=1e-6)
+    assert fit.sigma == pytest.approx(dense.sigma, abs=1e-7)
+    np.testing.assert_allclose(fit.beta, dense.beta, atol=1e-7)
+    np.testing.assert_allclose(fit.beta_se, dense.beta_se, atol=1e-7)
+    np.testing.assert_allclose(np.concatenate(fit.ranef), dense.ranef, atol=1e-6)
+    np.testing.assert_allclose(np.concatenate(fit.condsd), dense.condsd, atol=1e-6)
+    np.testing.assert_allclose(fit.fitted, dense.fitted, atol=1e-6)
+    np.testing.assert_allclose(fit.resid, y - fit.fitted)
+
+
+def test_a_trend_added_to_the_response_goes_to_its_coefficient() -> None:
+    """Adding c times a covariate to the response must raise that covariate's
+    coefficient by c and change nothing else."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    shifted = fit_lmm(y + 0.75 * covariates[:, 1], groups, covariates=covariates)
+    np.testing.assert_allclose(shifted.beta - base.beta, [0.0, 0.0, 0.75], atol=1e-7)
+    np.testing.assert_allclose(shifted.beta_se, base.beta_se, atol=1e-7)
+    np.testing.assert_allclose(shifted.theta, base.theta, atol=1e-6)
+    assert shifted.sigma == pytest.approx(base.sigma, abs=1e-7)
+    for got, want in zip(shifted.ranef, base.ranef):
+        np.testing.assert_allclose(got, want, atol=1e-6)
+    np.testing.assert_allclose(shifted.resid, base.resid, atol=1e-6)
+
+
+def test_moving_a_covariate_by_a_constant_moves_only_the_intercept() -> None:
+    """With an intercept, a covariate less a typical value fits the same model: its
+    coefficient stays, and the intercept becomes the mean at that typical value."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    moved = fit_lmm(y, groups, covariates=covariates - [6.0, 0.0])
+    np.testing.assert_allclose(moved.beta[1:], base.beta[1:], atol=1e-7)
+    assert moved.beta[0] == pytest.approx(base.beta[0] + 6.0 * base.beta[1], abs=1e-6)
+    np.testing.assert_allclose(moved.beta_se[1:], base.beta_se[1:], atol=1e-7)
+    np.testing.assert_allclose(moved.theta, base.theta, atol=1e-6)
+    np.testing.assert_allclose(moved.fitted, base.fitted, atol=1e-6)
+
+
+def test_one_covariate_may_be_a_vector() -> None:
+    y, groups, covariates = covariate_data()
+    as_vector = fit_lmm(y, groups, covariates=covariates[:, 0])
+    as_column = fit_lmm(y, groups, covariates=covariates[:, :1])
+    assert as_vector.beta.shape == (2,)
+    np.testing.assert_array_equal(as_vector.beta, as_column.beta)
+    np.testing.assert_array_equal(as_vector.fitted, as_column.fitted)
+
+
+def test_no_covariates_is_the_model_without_them() -> None:
+    """An empty set of covariates (n x 0) is the same as none."""
+    y, groups, _ = covariate_data()
+    plain = fit_lmm(y, groups)
+    empty = fit_lmm(y, groups, covariates=np.empty((y.size, 0)))
+    np.testing.assert_array_equal(empty.beta, plain.beta)
+    np.testing.assert_array_equal(empty.theta, plain.theta)
+
+
+def test_rejects_invalid_covariates() -> None:
+    y, groups, covariates = covariate_data()
+    with pytest.raises(ValueError, match="one row per observation"):
+        fit_lmm(y, groups, covariates=covariates[:-1])
+    with pytest.raises(ValueError, match="one row per observation"):
+        fit_lmm(y, groups, covariates=covariates.T)
+    with pytest.raises(ValueError, match="at most two-dimensional"):
+        fit_lmm(y, groups, covariates=covariates[:, :, None])
+    with_nan = covariates.copy()
+    with_nan[3, 1] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        fit_lmm(y, groups, covariates=with_nan)
+    # magnitude and magnitude + 1, with an intercept, cannot be told apart
+    collinear = np.column_stack([covariates[:, 0], covariates[:, 0] + 1.0])
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=collinear)
+    # an indicator for every class, with an intercept: they add up to the intercept
+    classes = np.arange(y.size) % 3
+    indicators = np.column_stack([classes == k for k in range(3)])
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=indicators)
+    # without the intercept, the same indicators are a valid model
+    assert fit_lmm(y, groups, covariates=indicators, intercept=False).beta.shape == (3,)

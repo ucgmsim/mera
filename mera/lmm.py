@@ -82,7 +82,8 @@ class LmmFit:
     ----------
     levels : list of np.ndarray
         Sorted string labels of each grouping factor: ``levels[0]`` holds the distinct
-        event ids and ``levels[1]`` the distinct site ids.
+        event ids and ``levels[1]`` the distinct site ids. They are the labels of the
+        observations that are in the factor.
     theta : np.ndarray
         Random-effect standard deviations relative to ``sigma``, one per factor. A value
         of exactly 0 is a *singular fit*: the data show no variation between the levels
@@ -157,7 +158,9 @@ def fit_lmm(
         Response, one value per observation.
     groups : sequence of array-like
         One array of labels per grouping factor (e.g. event ids, site ids), each with one
-        label per observation. Labels are compared as strings.
+        label per observation. Labels are compared as strings. In a numpy masked array,
+        the masked observations have no level in that factor and get no term from it:
+        see :func:`split_by_class`.
     intercept : bool, default True
         Whether to fit a fixed intercept (mera's bias).
     reml : bool, default True
@@ -206,8 +209,9 @@ def fit_lmm(
 
     Notes
     -----
-    Any number of grouping factors can be given, not only events and sites: see
-    ``docs/adding_models.md``.
+    Any number of grouping factors can be given, not only events and sites, and a
+    grouping factor can be given a separate standard deviation for each class of its
+    levels (:func:`split_by_class`): see ``docs/adding_models.md``.
 
     Labels are compared as strings, so ``1`` and ``"1"`` are the same level, while ``1``
     and ``1.0`` are different ones (``"1"`` and ``"1.0"``).
@@ -266,28 +270,38 @@ def fit_lmm(
         # each observation, which is the position of its label among the levels.
         levels, codes = [], []
         for k, group in enumerate(groups):
-            labels = np.asarray(group)
+            # A numpy masked array marks the observations that have no level in this
+            # factor, as split_by_class makes them. in_factor is True for the others:
+            # for every observation, if the labels are an ordinary array.
+            in_factor = ~np.ma.getmaskarray(group)
+            labels = np.ma.getdata(group)
             if labels.shape != y.shape:
                 raise ValueError(
                     f"each grouping factor needs one label per observation ({y.size}), "
                     f"got shape {labels.shape}"
                 )
             # Otherwise every missing id would become one shared level called "nan"/"None".
-            if np.any(pd.isna(labels)):
+            if np.any(pd.isna(labels[in_factor])):
                 raise ValueError(
                     f"grouping factor {k} has missing labels (NaN or None); "
                     "drop or label those observations first"
                 )
             # np.unique sorts the distinct labels and, with return_inverse, also gives
             # the position of each observation's label in that sorted list. For the
-            # labels ["b", "a", "b"], level is ["a", "b"] and code is [1, 0, 1].
-            level, code = np.unique(labels.astype(str), return_inverse=True)
+            # labels ["b", "a", "b"], level is ["a", "b"] and code is [1, 0, 1]. An
+            # observation that is not in the factor keeps the code -1, "no level".
+            level, code_in_factor = np.unique(
+                labels[in_factor].astype(str), return_inverse=True
+            )
+            code = np.full(y.size, -1, dtype=np.int64)
+            code[in_factor] = code_in_factor
             # As lme4: a single level cannot be separated from the intercept / residual,
             # and as many levels as observations cannot be separated from the residual.
             if level.size < 2:
+                found = "only one level" if level.size == 1 else "no levels"
                 raise ValueError(
-                    f"grouping factor {k} has only one level; each grouping factor "
-                    "needs more than one level"
+                    f"grouping factor {k} has {found}; each grouping factor needs "
+                    "more than one level"
                 )
             if level.size >= y.size:
                 raise ValueError(
@@ -296,7 +310,7 @@ def fit_lmm(
                     "observations"
                 )
             levels.append(level)
-            codes.append(code.astype(np.int64).ravel())
+            codes.append(code)
 
         # ---- 2. The fixed effects, and the engine ----
         # x is the fixed-effects matrix X: a row per observation and a column per fixed
@@ -430,10 +444,12 @@ def fit_lmm(
         ranef = np.split(out["ranef"], splits)
         condsd = np.split(out["condsd"], splits)
         # Fitted values: the fixed effects plus, for each factor, the term of the
-        # observation's level. b[code] looks up that term for every observation.
+        # observation's level. b[code[has_level]] looks up that term for every
+        # observation that has a level in the factor.
         fitted = x @ beta
         for b, code in zip(ranef, codes):
-            fitted = fitted + b[code]
+            has_level = code >= 0
+            fitted[has_level] += b[code[has_level]]
         return LmmFit(
             levels=levels,
             theta=theta,
@@ -448,6 +464,79 @@ def fit_lmm(
             converged=bool(result.success),
             n_evals=int(result.nfev),
         )
+
+
+def split_by_class(
+    labels: npt.ArrayLike, classes: npt.ArrayLike
+) -> list[np.ma.MaskedArray]:
+    """Splits a grouping factor into one factor per class of its levels.
+
+    Fitted with one grouping factor for the sites, a model gives the site terms one
+    standard deviation. Fitted with the factors that this function returns, it gives
+    the site terms of each class (of site conditions, say) a standard deviation of
+    their own::
+
+        fit = fit_lmm(y, [events, *split_by_class(sites, site_class)])
+        tau, *phi_s2s_of_each_class = fit.sd
+
+    Each of the returned factors holds the labels of one class. The observations of the
+    other classes are masked in it: they have no level in that factor, and get no term
+    from it.
+
+    Parameters
+    ----------
+    labels : array-like
+        The labels of the grouping factor (e.g. the site ids), one per observation.
+    classes : array-like
+        The class of each observation's label (e.g. the class of its site), one per
+        observation. Classes are compared as strings.
+
+    Returns
+    -------
+    list of np.ma.MaskedArray
+        One array of labels per class, in the sorted order of the classes, which is
+        that of ``np.unique(np.asarray(classes).astype(str))``.
+
+    Raises
+    ------
+    ValueError
+        If ``classes`` does not have one class per label, or has missing values.
+
+    Notes
+    -----
+    The classes usually also differ in their mean, which the model has to be told about
+    separately, with an indicator covariate for every class but one: see
+    ``docs/adding_models.md``.
+
+    A class needs at least two levels, as every grouping factor does.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from mera.lmm import split_by_class
+    >>> sites = np.array(["s1", "s2", "s3", "s1"])
+    >>> site_class = np.array(["rock", "soil", "rock", "rock"])
+    >>> rock, soil = split_by_class(sites, site_class)
+    >>> rock.tolist()
+    ['s1', None, 's3', 's1']
+    >>> soil.tolist()
+    [None, 's2', None, None]
+    """
+    labels = np.asarray(labels)
+    classes = np.asarray(classes)
+    if classes.shape != labels.shape:
+        raise ValueError(
+            f"classes needs one class per label ({labels.shape}), got shape "
+            f"{classes.shape}"
+        )
+    if np.any(pd.isna(classes)):
+        raise ValueError("classes has missing values (NaN or None)")
+    classes = classes.astype(str)
+    # In a masked array, True in the mask marks an entry as absent: here, the labels of
+    # the observations that are not of this class.
+    return [
+        np.ma.masked_array(labels, mask=classes != name) for name in np.unique(classes)
+    ]
 
 
 def _theta_from(omega: np.ndarray) -> np.ndarray:

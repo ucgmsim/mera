@@ -3,7 +3,7 @@ agree with mera itself: it is the documentation's account of what the engine com
 
 import numpy as np
 import pytest
-from example_data import add_covariate_trend
+from example_data import add_covariate_trend, assert_matches_dense
 
 from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import fit_lmm
@@ -30,21 +30,8 @@ def test_walkthrough_matches_fit_lmm(
     ours = walkthrough.estimates(walkthrough.find_theta(model), model)
     fit = fit_lmm(y, groups, intercept=intercept, covariates=covariates)
 
-    assert fit.converged
     assert fit.beta.shape == fit.beta_se.shape == (x.shape[1],)
-    for level, expected in zip(levels, fit.levels):
-        np.testing.assert_array_equal(level, expected)
-    assert ours.deviance == pytest.approx(fit.deviance, abs=1e-8)
-    np.testing.assert_allclose(ours.theta, fit.theta, atol=1e-6)
-    assert ours.sigma == pytest.approx(fit.sigma, abs=1e-7)
-    np.testing.assert_allclose(ours.sd, fit.sd, atol=1e-6)
-    np.testing.assert_allclose(ours.beta, fit.beta, atol=1e-7)
-    np.testing.assert_allclose(ours.beta_se, fit.beta_se, atol=1e-7)
-    np.testing.assert_allclose(ours.ranef, np.concatenate(fit.ranef), atol=1e-6)
-    np.testing.assert_allclose(ours.condsd, np.concatenate(fit.condsd), atol=1e-6)
-    np.testing.assert_allclose(ours.fitted, fit.fitted, atol=1e-6)
-    np.testing.assert_allclose(ours.resid, fit.resid, atol=1e-6)
-    np.testing.assert_allclose(fit.resid, y - fit.fitted)
+    assert_matches_dense(fit, ours, levels, y)
 
 
 @pytest.mark.parametrize("theta", [(1.0, 1.0), (0.0, 0.7), (0.4, 2.5)])

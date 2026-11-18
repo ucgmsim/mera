@@ -5,8 +5,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import mera
+from mera.example import maths_walkthrough as walkthrough
+from mera.lmm import LmmFit
 
 DATA_DIR = Path(__file__).parent.parent / "mera" / "example" / "resources"
 MASK_CSV = Path(__file__).parent / "resources" / "mask.csv"
@@ -129,6 +132,61 @@ def covariate_inputs(
     """The response, grouping factors and covariates of a fit in COVARIATE_FITS: an IM's
     residuals with the trend of :func:`add_covariate_trend`."""
     return add_covariate_trend(df[im].to_numpy(), *groups_of(df, True))
+
+
+# The made-up classes of site of add_site_classes, in the order that split_by_class
+# gives them (sorted by name).
+SITE_CLASSES = ["high", "low", "mid"]
+
+
+def add_site_classes(
+    y: np.ndarray, sites: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A response whose site terms are more scattered in some classes of site than in
+    others, the class of each record's site, and indicator covariates for the classes.
+
+    Every site is put in one of SITE_CLASSES. To ``y`` are added an offset per class
+    and a site term whose standard deviation depends on the class. The covariates are
+    an indicator column for each class but the first, which is the reference.
+    """
+    # class_fits.csv was made from these draws: keep the seed and their order.
+    rng = np.random.default_rng(11)
+    site_levels, site_codes = np.unique(sites, return_inverse=True)
+    # the same number of sites in each class, give or take one, in a shuffled order
+    class_of_site = rng.permutation(np.arange(site_levels.size) % len(SITE_CLASSES))
+    offsets = np.array([0.3, 0.0, -0.2])
+    extra_sd = np.array([0.9, 0.0, 0.4])
+    extra_term = extra_sd[class_of_site] * rng.normal(size=site_levels.size)
+    record_class = class_of_site[site_codes]
+    covariates = np.column_stack(
+        [record_class == k for k in range(1, len(SITE_CLASSES))]
+    ).astype(float)
+    return (
+        y + offsets[record_class] + extra_term[site_codes],
+        np.array(SITE_CLASSES)[record_class],
+        covariates,
+    )
+
+
+def assert_matches_dense(
+    fit: LmmFit, dense: walkthrough.Estimates, levels: list[np.ndarray], y: np.ndarray
+) -> None:
+    """Every result of fit_lmm equals that of the dense numpy implementation, which is
+    independent of the Rust engine. ``levels`` are those of the dense implementation."""
+    assert fit.converged
+    for level, expected in zip(levels, fit.levels):
+        np.testing.assert_array_equal(level, expected)
+    assert dense.deviance == pytest.approx(fit.deviance, abs=1e-8)
+    np.testing.assert_allclose(dense.theta, fit.theta, atol=1e-6)
+    assert dense.sigma == pytest.approx(fit.sigma, abs=1e-7)
+    np.testing.assert_allclose(dense.sd, fit.sd, atol=1e-6)
+    np.testing.assert_allclose(dense.beta, fit.beta, atol=1e-7)
+    np.testing.assert_allclose(dense.beta_se, fit.beta_se, atol=1e-7)
+    np.testing.assert_allclose(dense.ranef, np.concatenate(fit.ranef), atol=1e-6)
+    np.testing.assert_allclose(dense.condsd, np.concatenate(fit.condsd), atol=1e-6)
+    np.testing.assert_allclose(dense.fitted, fit.fitted, atol=1e-6)
+    np.testing.assert_allclose(dense.resid, fit.resid, atol=1e-6)
+    np.testing.assert_allclose(fit.resid, y - fit.fitted)
 
 
 @dataclass(frozen=True)

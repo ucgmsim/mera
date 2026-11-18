@@ -105,7 +105,9 @@ def indicator_matrix(
     ----------
     groups : sequence of array-like
         One array of labels per grouping factor (the event ids, the site ids), each
-        with one label per record.
+        with one label per record. In a numpy masked array, the masked records have no
+        level in that factor (see ``mera.lmm.split_by_class``): their rows have only
+        zeros in its columns.
 
     Returns
     -------
@@ -119,12 +121,16 @@ def indicator_matrix(
     """
     blocks, level_factor, levels = [], [], []
     for k, group in enumerate(groups):
+        # in_factor is True for the records that have a level in this factor: all of
+        # them, unless the labels are a masked array.
+        in_factor = ~np.ma.getmaskarray(group)
+        labels = np.ma.getdata(group)[in_factor]
         # level holds the distinct labels, sorted, and code the position of each
         # record's label among them.
-        level, code = np.unique(np.asarray(group).astype(str), return_inverse=True)
-        block = np.zeros((code.size, level.size))
-        # For every record i at once, put a 1 in row i, column code[i].
-        block[np.arange(code.size), code] = 1.0
+        level, code = np.unique(labels.astype(str), return_inverse=True)
+        block = np.zeros((in_factor.size, level.size))
+        # For every record i of the factor at once, put a 1 in row i, column code[i].
+        block[np.flatnonzero(in_factor), code] = 1.0
         blocks.append(block)
         level_factor.append(np.full(level.size, k))
         levels.append(level)

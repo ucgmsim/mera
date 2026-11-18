@@ -8,15 +8,16 @@ from mera import _lmm
 
 def test_invalid_input_raises_value_error():
     codes = [np.array([0, 1, 1], dtype=np.int64)]
+    no_x = np.empty((3, 0))  # no fixed effects
     with pytest.raises(ValueError):
-        _lmm.CrossedModel(codes, np.array([1.0, np.nan, 3.0]))
+        _lmm.CrossedModel(codes, np.array([1.0, np.nan, 3.0]), no_x)
     with pytest.raises(ValueError):
         _lmm.CrossedModel(
-            [np.array([0, -1, 1], dtype=np.int64)], np.array([1.0, 2.0, 3.0])
+            [np.array([0, -1, 1], dtype=np.int64)], np.array([1.0, 2.0, 3.0]), no_x
         )
     with pytest.raises(ValueError):
         _lmm.CrossedModel(codes, np.array([1.0, 2.0, 3.0]), np.ones((2, 1)))
-    model = _lmm.CrossedModel(codes, np.array([1.0, 2.0, 4.0]))
+    model = _lmm.CrossedModel(codes, np.array([1.0, 2.0, 4.0]), no_x)
     with pytest.raises(ValueError):
         model.deviance([-1.0])
     with pytest.raises(ValueError):
@@ -45,7 +46,8 @@ def test_other_threads_run_during_a_calculation() -> None:
     n_events, n_sites, records_per_event = 1500, 750, 20
     events = np.repeat(np.arange(n_events, dtype=np.int64), records_per_event)
     sites = rng.integers(0, n_sites, events.size, dtype=np.int64)
-    model = _lmm.CrossedModel([events, sites], rng.normal(size=events.size))
+    y = rng.normal(size=events.size)
+    model = _lmm.CrossedModel([events, sites], y, np.empty((y.size, 0)))
     start_together = threading.Barrier(2)
     refused = []
 

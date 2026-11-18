@@ -46,9 +46,10 @@ class CrossedModel:
         observation as an integer 0, 1, 2, ...
     y : float64 array
         The response, one value per observation.
-    x : float64 array of shape (n, p), optional
+    x : float64 array of shape (n, p)
         The fixed-effects matrix: one row per observation and one column per fixed
-        effect. A column of ones fits an intercept. None fits no fixed effects.
+        effect. A column of ones fits an intercept. With no columns (shape (n, 0)) no
+        fixed effects are fitted.
     reml : bool, default True
         Restricted maximum likelihood (True) or maximum likelihood (False).
 
@@ -68,7 +69,7 @@ class CrossedModel:
         self,
         codes: Sequence[npt.NDArray[np.int64]],
         y: npt.NDArray[np.float64],
-        x: npt.NDArray[np.float64] | None = None,
+        x: npt.NDArray[np.float64],
         *,
         reml: bool = True,
     ) -> None: ...

@@ -33,7 +33,7 @@ fn to_py_err(error: LmmError) -> PyErr {
 /// A linear mixed model with crossed random intercepts, evaluated at any theta.
 ///
 /// `codes` holds one int64 array of level codes (0, 1, ...) per grouping factor, `y` the
-/// response and `x` the optional n x p fixed-effects matrix.
+/// response and `x` the n x p fixed-effects matrix (n x 0 for no fixed effects).
 //
 // Python runs one thread at a time, under a lock (the "GIL"). The engine's calculations
 // need nothing from Python, so each method below releases the lock around them with
@@ -49,12 +49,12 @@ struct PyCrossedModel {
 #[pymethods]
 impl PyCrossedModel {
     #[new]
-    #[pyo3(signature = (codes, y, x=None, *, reml=true))]
+    #[pyo3(signature = (codes, y, x, *, reml=true))]
     fn new(
         py: Python<'_>,
         codes: Vec<PyReadonlyArray1<i64>>,
         y: PyReadonlyArray1<f64>,
-        x: Option<PyReadonlyArray2<f64>>,
+        x: PyReadonlyArray2<f64>,
         reml: bool,
     ) -> PyResult<Self> {
         // Copy each array of codes into a Rust vector, checking that none is negative
@@ -73,15 +73,9 @@ impl PyCrossedModel {
             .collect::<PyResult<Vec<_>>>()?;
         let y: Vec<f64> = y.as_array().iter().copied().collect();
         // The engine takes x as one flat list, column after column, with p its number of
-        // columns. Without x, there are no fixed effects.
-        let (x, p) = match &x {
-            Some(x) => {
-                let x = x.as_array();
-                // iterating the transpose visits x in column-major order
-                (x.t().iter().copied().collect::<Vec<f64>>(), x.ncols())
-            }
-            None => (Vec::new(), 0),
-        };
+        // columns. Iterating the transpose visits x in that order.
+        let x = x.as_array();
+        let (x, p) = (x.t().iter().copied().collect::<Vec<f64>>(), x.ncols());
         // The arrays are copied by now, so the rest needs nothing from Python.
         let inner = py
             .detach(|| CrossedModel::new(Design::new(&codes, &y, &x, p)?, reml))

@@ -403,9 +403,9 @@ fn simplicial_selected_inverse(s: &SymbolicSimplicialCholesky<usize>, l: &[f64])
     // The sums of the recurrences for the column being computed, one per row of R_j.
     // (The list is created once and reused for every column.)
     let mut acc: Vec<f64> = Vec::new();
-    // position[row] = place of `row` among the rows R_j of the column being computed,
-    // usize::MAX (the largest integer, used as "none") if it is not one of them
-    let mut position = vec![usize::MAX; n];
+    // position[row]: the place of `row` among the rows R_j of the column being computed,
+    // `None` if it is not one of them
+    let mut position: Vec<Option<usize>> = vec![None; n];
     for j in (0..n).rev() {
         let (start, end) = (col_ptr[j], col_ptr[j + 1]);
         let l_jj = l[start]; // rows are sorted, so the diagonal comes first
@@ -415,7 +415,7 @@ fn simplicial_selected_inverse(s: &SymbolicSimplicialCholesky<usize>, l: &[f64])
         acc.clear();
         acc.resize(rows.len(), 0.0);
         for (slot, &row) in rows.iter().enumerate() {
-            position[row] = slot;
+            position[row] = Some(slot);
         }
         // acc[a] = sum_b Z[rows[a], rows[b]] L[rows[b], j]. Every Z[rows[a], k] with
         // k = rows[b] lives in column k of Z (its diagonal, or a row below it).
@@ -425,8 +425,7 @@ fn simplicial_selected_inverse(s: &SymbolicSimplicialCholesky<usize>, l: &[f64])
             acc[b] += z[k_start] * l_col[b];
             // the entries below it: column k is walked, and the rows in R_j picked out
             for t in k_start + 1..k_end {
-                let a = position[row_idx[t]];
-                if a != usize::MAX {
+                if let Some(a) = position[row_idx[t]] {
                     // Z is symmetric, so the stored entry Z[rows[a], k] is also
                     // Z[k, rows[a]]: it contributes to both sums.
                     acc[a] += z[t] * l_col[b];
@@ -435,7 +434,7 @@ fn simplicial_selected_inverse(s: &SymbolicSimplicialCholesky<usize>, l: &[f64])
             }
         }
         for &row in rows {
-            position[row] = usize::MAX;
+            position[row] = None;
         }
         // The two recurrences: first the entries below the diagonal, then the diagonal.
         let mut sum = 0.0;

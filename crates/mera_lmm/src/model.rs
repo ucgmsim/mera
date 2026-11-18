@@ -157,6 +157,20 @@ struct Profile {
     w: Mat<f64>,
 }
 
+impl Profile {
+    /// `u = A^-1 Lambda' Z'(y - X beta)`: the random effects on the common scale on which
+    /// each has standard deviation sigma. The random effects themselves are
+    /// `b = Lambda u`.
+    ///
+    /// Column 0 of `W` is `A^-1 Lambda' Z'y` and the other columns are
+    /// `A^-1 Lambda' Z'X`, so `u` is column 0 less the other columns times `beta`.
+    /// (`subcols(1, p)` is "p columns, starting at column 1": all but column 0.)
+    fn u(&self) -> Col<f64> {
+        let p = self.beta.nrows();
+        self.w.col(0) - self.w.subcols(1, p) * &self.beta
+    }
+}
+
 /// A linear mixed model with crossed random intercepts that can be evaluated at any theta.
 ///
 /// Python creates one of these per fit (`mera._lmm.CrossedModel`), calls
@@ -249,8 +263,6 @@ impl CrossedModel {
         let profile = self.profile(&theta)?;
         let d = &self.design; // a shorter name
         let (q, p) = (d.q(), d.p);
-        // n - p for REML, n for ML
-        let dof = self.degrees_of_freedom();
         // bracket[k]: the sum of the square brackets over the levels of factor k
         let mut bracket = vec![0.0; d.n_factors()];
 
@@ -282,23 +294,23 @@ impl CrossedModel {
         }
 
         // ---- c_i and dof * u_i^2 / r2 ----
-        let xvx_inverse = profile.xvx.inverse();
-        let w = &profile.w;
+        let u = profile.u();
+        // n - p for REML, n for ML
+        let dof = self.degrees_of_freedom();
+        // c_i = w_i' (X'V^-1X)^-1 w_i, where w_i is row i of `wx`: the columns of W that
+        // belong to X. Row i of `solved` is w_i' (X'V^-1X)^-1, so c_i is the sum of the
+        // products of that row with w_i, entry by entry. (In numpy:
+        // `solved = wx @ xvx_inverse` and `c = (solved * wx).sum(axis=1)`.)
+        let wx = profile.w.subcols(1, p);
+        let solved = wx * profile.xvx.inverse();
         for i in 0..q {
-            // u_i: column 0 of W is A^-1 Lambda' Z'y, and the others A^-1 Lambda' Z'X
-            let u = w[(i, 0)] - (0..p).map(|a| w[(i, 1 + a)] * profile.beta[a]).sum::<f64>();
-            // c_i = w_i' (X'V^-1X)^-1 w_i, where w_i holds the entries of row i of W that
-            // belong to X: a sum over every pair (a, b) of fixed effects. It stays zero
-            // for ML, whose criterion has no log|X'V^-1X| term.
-            let mut c = 0.0;
-            if self.reml {
-                for a in 0..p {
-                    for b in 0..p {
-                        c += w[(i, 1 + a)] * xvx_inverse[(a, b)] * w[(i, 1 + b)];
-                    }
-                }
-            }
-            bracket[d.level_factor[i]] -= c + dof * u * u / profile.r2;
+            // c_i is left out for ML, whose criterion has no log|X'V^-1X| term.
+            let c = if self.reml {
+                (0..p).map(|a| solved[(i, a)] * wx[(i, a)]).sum::<f64>()
+            } else {
+                0.0
+            };
+            bracket[d.level_factor[i]] -= c + dof * u[i] * u[i] / profile.r2;
         }
         // Divide the sum of each factor by its theta squared, as in the formula.
         let gradient = bracket
@@ -334,12 +346,9 @@ impl CrossedModel {
         let p = self.design.p;
         let sigma2 = profile.r2 / self.degrees_of_freedom();
         let sigma = sigma2.sqrt();
-        let (w, lambda) = (&profile.w, &profile.lambda);
-        // The random effects. Column 0 of W is A^-1 Lambda' Z'y and the other columns are
-        // A^-1 Lambda' Z'X, so this line is
-        // u = A^-1 Lambda' Z'(y - X beta);  b = Lambda u
-        // (`subcols(1, p)` is "p columns, starting at column 1": all but column 0.)
-        let ranef = lambda.as_diagonal() * (w.col(0) - w.subcols(1, p) * &profile.beta);
+        let lambda = &profile.lambda;
+        // The random effects: b = Lambda u, each u times the theta of its level's factor.
+        let ranef = lambda.as_diagonal() * profile.u();
         // vcov(beta) = sigma^2 (X'V^-1X)^-1
         let xvx_inverse = profile.xvx.inverse();
         let beta_se = (0..p)

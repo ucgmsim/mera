@@ -203,9 +203,10 @@ def fit_lmm(
     Labels are compared as strings, so ``1`` and ``"1"`` are the same level, while ``1``
     and ``1.0`` are different ones (``"1"`` and ``"1.0"``).
 
-    With an intercept, the fit is done on ``y`` less its mean, and the mean is added
-    back to the intercept. This changes no result, and keeps the fit accurate however
-    large the mean of ``y`` is compared with its spread.
+    The fit is done on ``y`` less its least-squares fit on the fixed effects (its mean,
+    when the intercept is the only one), and the coefficients of that fit are added
+    back to ``beta``. This changes no result, and keeps the fit accurate however large
+    the mean of ``y``, or its trend with a covariate, is compared with its spread.
 
     The result does not depend on ``start``, to the precision of the search, but the
     number of evaluations does. When many similar datasets are fitted, as in a bootstrap,
@@ -226,8 +227,9 @@ def fit_lmm(
     The criterion does lose precision when a random-effect standard deviation is
     hundreds of times larger than the residual standard deviation: at a thousand times,
     ``theta`` is good to about four digits. Ground-motion residuals are nowhere near
-    that. The same happens without an intercept when the mean of ``y`` is far from zero,
-    because the random effects then have to account for it.
+    that. The same happens when the mean of ``y`` is far from zero and no fixed effect
+    can absorb it (with neither an intercept nor covariates, say), because the random
+    effects then have to account for it.
 
     Examples
     --------
@@ -306,29 +308,38 @@ def fit_lmm(
                     f"got shape {extra.shape}"
                 )
             x = np.column_stack([x, extra])
-            # If one column is a combination of the others, their coefficients cannot be
-            # told apart. The engine would then fail, or return meaningless coefficients
-            # with enormous standard errors, depending on rounding. Each column is
-            # scaled to length 1 first, so that the check does not depend on the units
-            # of the covariates. (NaN or infinite values are reported by the engine.)
-            if np.all(np.isfinite(x)):
-                lengths = np.linalg.norm(x, axis=0)
-                if np.any(lengths == 0.0) or (
-                    np.linalg.matrix_rank(x / lengths) < x.shape[1]
-                ):
-                    raise ValueError(
-                        "the fixed effects are collinear: one column (the intercept or "
-                        "a covariate) is a combination of the others"
-                    )
-        # With an intercept, the engine is given y less its mean, and the mean is added
-        # back to the intercept afterwards. Moving y by a constant changes nothing else
-        # in a model with an intercept, and it keeps the arithmetic accurate: the engine
-        # finds a sum of squares by subtraction, which loses digits when the mean of y
-        # is far larger than its spread.
-        centre = y.mean() if intercept else 0.0
+        if not (np.all(np.isfinite(y)) and np.all(np.isfinite(x))):
+            raise ValueError("y or the covariates contain NaN or infinite values")
+
+        # The engine is not given y itself, but y less its least-squares fit on the
+        # fixed effects: what an ordinary regression of y on the columns of x, ignoring
+        # the groups, leaves over. With only an intercept, that is y less its mean. The
+        # coefficients of that regression (start_beta) are added back to beta after the
+        # fit. This changes no result, because the model can express the same shift
+        # through beta, and it keeps the arithmetic accurate: the engine finds a sum of
+        # squares by subtraction, which loses digits when the mean of y, or its trend
+        # with a covariate, is far larger than its spread.
+        start_beta = np.zeros(x.shape[1])
+        if x.shape[1] > 0:
+            # Each column is scaled to length 1 first, so that neither the regression
+            # nor the check below depends on the units of the covariates.
+            lengths = np.linalg.norm(x, axis=0)
+            rank = 0
+            if np.all(lengths > 0.0):
+                scaled_beta, _, rank, _ = np.linalg.lstsq(x / lengths, y, rcond=None)
+                start_beta = scaled_beta / lengths
+            # The rank is the number of columns that are not combinations of the
+            # others. If it is less than the number of columns, their coefficients
+            # cannot be told apart, and the engine would fail or return meaningless
+            # coefficients with enormous standard errors, depending on rounding.
+            if rank < x.shape[1]:
+                raise ValueError(
+                    "the fixed effects are collinear: one column (the intercept or a "
+                    "covariate) is a combination of the others"
+                )
         # Creating the model reduces the data to sums per level, once. After that,
         # model.deviance(theta) is the criterion at any theta.
-        model = _lmm.CrossedModel(codes, y - centre, x, reml=reml)
+        model = _lmm.CrossedModel(codes, y - x @ start_beta, x, reml=reml)
         n_factors = len(codes)
 
         # ---- 3. Search for the theta with the smallest criterion ----
@@ -386,9 +397,7 @@ def fit_lmm(
 
         # ---- 4. The estimates at that theta ----
         out = model.fit_at(theta.tolist())
-        beta = out["beta"]
-        if intercept:
-            beta[0] += centre
+        beta = out["beta"] + start_beta
         # The engine returns the random effects of all factors in one array: those of
         # the first factor's levels, then the second's. Cut it back into one array per
         # factor, each aligned with that factor's levels.

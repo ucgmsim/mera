@@ -93,8 +93,9 @@
 //! `log10(y'y / r2)` go. For ground-motion residuals that is about one digit. It starts
 //! to matter when the mean of the response, or a random-effect standard deviation, is
 //! hundreds of times larger than sigma: at a thousand times, theta is good to about four
-//! digits. `mera.lmm.fit_lmm` removes the first of these causes: when an intercept is
-//! fitted, it subtracts the mean of the response before it calls this crate.
+//! digits. `mera.lmm.fit_lmm` removes the first of these causes: before it calls this
+//! crate, it subtracts from the response its least-squares fit on the fixed effects (its
+//! mean, when the intercept is the only one).
 
 use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::{Col, Mat, MatRef, Side};

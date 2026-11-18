@@ -157,7 +157,7 @@ Advice on covariates:
   at magnitude 6 rather than at magnitude 0. It also keeps the arithmetic accurate: a
   covariate whose mean is thousands of times its spread, such as a year or a coordinate in
   metres, costs digits: at ten thousand times, the standard deviations are good to about
-  five digits.
+  four digits.
 - A covariate must vary, and must not be an exact combination of the other columns
   (magnitude and magnitude + 1, with a bias, is one). `fit_lmm` stops with an error that
   says the fixed effects are collinear. Covariates that are nearly, but not exactly, a

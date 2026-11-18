@@ -417,3 +417,25 @@ def test_the_units_of_a_covariate_do_not_matter() -> None:
             scaled.beta_se * [1.0, scale, 1.0], base.beta_se, rtol=1e-6
         )
         np.testing.assert_allclose(scaled.theta, base.theta, atol=1e-6)
+
+
+@pytest.mark.parametrize("offset", [1e4, 1e6])
+def test_a_large_mean_costs_no_precision_without_an_intercept(offset: float) -> None:
+    """An indicator for every class and no intercept is the same model as an intercept
+    with all classes but one. Adding a constant to the response must then move every
+    class coefficient by that constant and nothing else. Fitted as given, a response
+    with a mean of 1e4 had theta out by 2e-4, and with 1e6 by 0.6, both reported as
+    converged."""
+    y, groups, _ = covariate_data()
+    classes = np.arange(y.size) % 3
+    indicators = np.column_stack([classes == k for k in range(3)]).astype(float)
+    base = fit_lmm(y, groups, covariates=indicators, intercept=False)
+    shifted = fit_lmm(y + offset, groups, covariates=indicators, intercept=False)
+    assert shifted.converged
+    np.testing.assert_allclose(shifted.theta, base.theta, atol=1e-6)
+    assert shifted.sigma == pytest.approx(base.sigma, abs=1e-7)
+    np.testing.assert_allclose(shifted.beta - offset, base.beta, atol=1e-6)
+    np.testing.assert_allclose(shifted.beta_se, base.beta_se, atol=1e-7)
+    for got, want in zip(shifted.ranef, base.ranef):
+        np.testing.assert_allclose(got, want, atol=1e-6)
+    np.testing.assert_allclose(shifted.resid, base.resid, atol=1e-6)

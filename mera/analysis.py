@@ -27,14 +27,20 @@ How the work is divided:
 
 import multiprocessing as mp
 import warnings
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any
 
 import natsort
 import numpy as np
 import pandas as pd
 
 from .lmm import fit_lmm
+
+# The tables of MeraResults that every run has, and that are always saved. A missing file
+# for one of them is an error when loading; the other tables are then None.
+_ALWAYS_SAVED = ("event_res_df", "event_cond_std_df", "bias_std_df")
 
 
 @dataclass
@@ -117,18 +123,8 @@ class MeraResults:
         save_rem : bool, default = True
             Whether to save the remaining residuals (rem_res_df)
         """
-        self.event_res_df.to_csv(output_dir / "event_res_df.csv")
-        self.event_cond_std_df.to_csv(output_dir / "event_cond_std_df.csv")
-        self.bias_std_df.to_csv(output_dir / "bias_std_df.csv")
-        if save_rem and self.rem_res_df is not None:
-            self.rem_res_df.to_csv(output_dir / "rem_res_df.csv")
-        if save_fit and self.fit_df is not None:
-            self.fit_df.to_csv(output_dir / "fit_df.csv")
-
-        if self.site_res_df is not None:
-            self.site_res_df.to_csv(output_dir / "site_res_df.csv")
-        if self.site_cond_std_df is not None:
-            self.site_cond_std_df.to_csv(output_dir / "site_cond_std_df.csv")
+        for name, table in self._tables_to_save(save_fit, save_rem).items():
+            table.to_csv(output_dir / f"{name}.csv")
 
     @classmethod
     def load(cls, data_dir: Path):
@@ -148,31 +144,7 @@ class MeraResults:
         MeraResults
             Loaded MeraResults
         """
-        return cls(
-            pd.read_csv(data_dir / "event_res_df.csv", index_col=0),
-            pd.read_csv(data_dir / "event_cond_std_df.csv", index_col=0),
-            (
-                pd.read_csv(data_dir / "rem_res_df.csv", index_col=0)
-                if (data_dir / "rem_res_df.csv").exists()
-                else None
-            ),
-            pd.read_csv(data_dir / "bias_std_df.csv", index_col=0),
-            (
-                pd.read_csv(data_dir / "fit_df.csv", index_col=0)
-                if (data_dir / "fit_df.csv").exists()
-                else None
-            ),
-            (
-                pd.read_csv(data_dir / "site_res_df.csv", index_col=0)
-                if (data_dir / "site_res_df.csv").exists()
-                else None
-            ),
-            (
-                pd.read_csv(data_dir / "site_cond_std_df.csv", index_col=0)
-                if (data_dir / "site_cond_std_df.csv").exists()
-                else None
-            ),
-        )
+        return cls._load(data_dir, "csv", lambda path: pd.read_csv(path, index_col=0))
 
     def save_to_parquet(
         self, output_dir: Path, save_fit: bool = True, save_rem: bool = True
@@ -192,18 +164,8 @@ class MeraResults:
         save_rem : bool, default = True
             Whether to save the remaining residuals (rem_res_df)
         """
-        self.event_res_df.to_parquet(output_dir / "event_res_df.parquet")
-        self.event_cond_std_df.to_parquet(output_dir / "event_cond_std_df.parquet")
-        self.bias_std_df.to_parquet(output_dir / "bias_std_df.parquet")
-        if save_rem and self.rem_res_df is not None:
-            self.rem_res_df.to_parquet(output_dir / "rem_res_df.parquet")
-        if save_fit and self.fit_df is not None:
-            self.fit_df.to_parquet(output_dir / "fit_df.parquet")
-
-        if self.site_res_df is not None:
-            self.site_res_df.to_parquet(output_dir / "site_res_df.parquet")
-        if self.site_cond_std_df is not None:
-            self.site_cond_std_df.to_parquet(output_dir / "site_cond_std_df.parquet")
+        for name, table in self._tables_to_save(save_fit, save_rem).items():
+            table.to_parquet(output_dir / f"{name}.parquet")
 
     @classmethod
     def load_from_parquet(cls, data_dir: Path):
@@ -220,31 +182,64 @@ class MeraResults:
         MeraResults
             Loaded MeraResults
         """
-        return cls(
-            pd.read_parquet(data_dir / "event_res_df.parquet"),
-            pd.read_parquet(data_dir / "event_cond_std_df.parquet"),
-            (
-                pd.read_parquet(data_dir / "rem_res_df.parquet")
-                if (data_dir / "rem_res_df.parquet").exists()
-                else None
-            ),
-            pd.read_parquet(data_dir / "bias_std_df.parquet"),
-            (
-                pd.read_parquet(data_dir / "fit_df.parquet")
-                if (data_dir / "fit_df.parquet").exists()
-                else None
-            ),
-            (
-                pd.read_parquet(data_dir / "site_res_df.parquet")
-                if (data_dir / "site_res_df.parquet").exists()
-                else None
-            ),
-            (
-                pd.read_parquet(data_dir / "site_cond_std_df.parquet")
-                if (data_dir / "site_cond_std_df.parquet").exists()
-                else None
-            ),
-        )
+        return cls._load(data_dir, "parquet", pd.read_parquet)
+
+    def _tables_to_save(
+        self, save_fit: bool, save_rem: bool
+    ) -> dict[str, pd.DataFrame]:
+        """
+        The tables to write to files, by the name of their attribute
+
+        Parameters
+        ----------
+        save_fit : bool
+            Whether to include the fitted values (fit_df)
+        save_rem : bool
+            Whether to include the remaining residuals (rem_res_df)
+
+        Returns
+        -------
+        dict
+            The tables that exist (are not None), less those that were switched off
+        """
+        switched_off = {"fit_df": not save_fit, "rem_res_df": not save_rem}
+        tables = {}
+        # fields(self) lists the attributes declared above, in that order.
+        for field in fields(self):
+            table = getattr(self, field.name)
+            if table is not None and not switched_off.get(field.name, False):
+                tables[field.name] = table
+        return tables
+
+    @classmethod
+    def _load(
+        cls, data_dir: Path, suffix: str, read: Callable[[Path], pd.DataFrame]
+    ) -> "MeraResults":
+        """
+        Reads the tables that were saved in one format
+
+        Parameters
+        ----------
+        data_dir : Path
+            Directory containing the MeraResults files
+        suffix : str
+            File name extension of the format, "csv" or "parquet"
+        read : callable
+            Function that reads one file of that format into a dataframe
+
+        Returns
+        -------
+        MeraResults
+            Loaded MeraResults, with None for each optional table that has no file
+        """
+        # Any: the values are dataframes, or None for the optional tables only, which is
+        # more than the type checker can follow through the loop.
+        tables: dict[str, Any] = {}
+        for field in fields(cls):
+            path = data_dir / f"{field.name}.{suffix}"
+            is_saved = field.name in _ALWAYS_SAVED or path.exists()
+            tables[field.name] = read(path) if is_saved else None
+        return cls(**tables)
 
 
 def run_mera(

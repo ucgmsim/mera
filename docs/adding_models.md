@@ -254,10 +254,11 @@ for `site` finds every place:
    new standard deviation in the total `sigma`. `run_mera` ends in two branches, with and
    without the site term, and both need the change. When the new factor is not fitted,
    drop its column from `bias_std_df`, as the second branch does for `phi_S2S`.
-7. **`MeraResults`.** Add the two tables as attributes, and to `save`, `load`,
-   `save_to_parquet` and `load_from_parquet`. `MeraResults` is created by position in
-   `run_mera` and in the two `load` methods, so put the new attributes last, with a
-   default of `None`, and existing code keeps working.
+7. **`MeraResults`.** Add the two tables as attributes. `MeraResults` is created by
+   position in `run_mera`, so put the new attributes last, with a default of `None`, and
+   existing code keeps working. `save`, `load` and their parquet versions go through
+   the attributes by themselves, and need no change: a table that is `None` is not
+   saved, and one without a file is loaded as `None`.
 
 One more thing to watch: `mask_too_few_records` treats every column of the residual table
 other than the event and site ids as an IM. Give it only those columns, for example

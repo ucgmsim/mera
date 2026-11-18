@@ -662,10 +662,11 @@ mod tests {
     // answers as faer's dense routines, in both layouts.
     use super::*;
     use crate::design::Design;
-    use crate::testing::Lcg;
+    use crate::testing::{Lcg, two_factor_codes};
     use approx::{assert_abs_diff_eq, assert_relative_eq};
     use faer::Mat;
     use faer::linalg::solvers::{DenseSolveCore, Solve};
+    use proptest::prelude::*;
 
     /// `A = Lambda Z'Z Lambda + I` for a random two-factor design: CSC lower triangle and dense.
     fn random_matrix(
@@ -677,9 +678,16 @@ mod tests {
         let mut rng = Lcg::new(seed);
         let ev: Vec<usize> = (0..n).map(|_| rng.below(events)).collect();
         let st: Vec<usize> = (0..n).map(|_| rng.below(sites)).collect();
+        matrix_of(ev, st, [0.8, 1.3])
+    }
+
+    /// `A = Lambda Z'Z Lambda + I` for the design with the given event and site of each
+    /// record, at the given theta: CSC lower triangle and dense.
+    fn matrix_of(ev: Vec<usize>, st: Vec<usize>, theta: [f64; 2]) -> (Design, Vec<f64>, Mat<f64>) {
+        let n = ev.len();
         let design = Design::from_full_codes(&[ev, st], &vec![0.0; n], &[], 0).unwrap();
         let mut values = vec![0.0; design.ztz.len()];
-        design.fill_a(&[0.8, 1.3], &mut values);
+        design.fill_a(&theta, &mut values);
         let q = design.q();
         let mut dense = Mat::<f64>::zeros(q, q);
         for c in 0..q {
@@ -746,6 +754,36 @@ mod tests {
         }
     }
 
+    /// Checks the entries that are read from the selected inverse (the diagonal, and the
+    /// entries where `A` has entries) against a dense inverse of `A`, to within `epsilon`.
+    fn check_selected_inverse(
+        design: &Design,
+        values: &[f64],
+        dense: &Mat<f64>,
+        kind: FactorKind,
+        epsilon: f64,
+    ) {
+        let factor = factorised(design, values, 1, kind);
+        let expected = dense.llt(Side::Lower).unwrap().inverse();
+        // The diagonal, in the order of the levels.
+        let diagonal = factor.inverse_diagonal();
+        for i in 0..design.q() {
+            assert_abs_diff_eq!(diagonal[i], expected[(i, i)], epsilon = epsilon);
+        }
+        // One value for each stored entry of A, in the order of its columns and rows.
+        let on_pattern = factor.inverse_on_pattern();
+        assert_eq!(on_pattern.len(), design.row_idx.len());
+        for c in 0..design.q() {
+            let entries = design.col_ptr[c]..design.col_ptr[c + 1];
+            let column = on_pattern[entries.clone()]
+                .iter()
+                .zip(&design.row_idx[entries]);
+            for (&value, &row) in column {
+                assert_abs_diff_eq!(value, expected[(row, c)], epsilon = epsilon);
+            }
+        }
+    }
+
     #[test]
     fn selected_inverse_matches_dense_inverse() {
         for kind in [FactorKind::Simplicial, FactorKind::Supernodal] {
@@ -754,26 +792,28 @@ mod tests {
                     let (design, values, dense) = random_matrix(seed, n, events, sites);
                     let factor = factorised(&design, &values, 1, kind);
                     assert_eq!(factor.is_simplicial(), kind == FactorKind::Simplicial);
-                    let expected = dense.llt(Side::Lower).unwrap().inverse();
-                    // The diagonal, in the order of the levels.
-                    let diagonal = factor.inverse_diagonal();
-                    for i in 0..design.q() {
-                        assert_abs_diff_eq!(diagonal[i], expected[(i, i)], epsilon = 1e-12);
-                    }
-                    // One value for each stored entry of A, in the order of its columns
-                    // and rows.
-                    let on_pattern = factor.inverse_on_pattern();
-                    assert_eq!(on_pattern.len(), design.row_idx.len());
-                    for c in 0..design.q() {
-                        let entries = design.col_ptr[c]..design.col_ptr[c + 1];
-                        let column = on_pattern[entries.clone()]
-                            .iter()
-                            .zip(&design.row_idx[entries]);
-                        for (&value, &row) in column {
-                            assert_abs_diff_eq!(value, expected[(row, c)], epsilon = 1e-12);
-                        }
-                    }
+                    check_selected_inverse(&design, &values, &dense, kind, 1e-12);
                 }
+            }
+        }
+    }
+
+    proptest! {
+        // A property test (see `testing.rs`): at each run of the tests, 64 new random
+        // designs. (proptest's usual 256 would take several seconds in a debug build.)
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Whatever the design and theta, both layouts give the entries of the dense
+        /// inverse. The fixed designs of the test above make sure that the supernodal
+        /// code is reached in full; these look for a design that nobody thought of.
+        #[test]
+        fn selected_inverse_matches_dense_inverse_for_any_design(
+            (events, sites) in two_factor_codes(60, 40, 1..=400),
+            theta in [0.05f64..5.0, 0.05f64..5.0],
+        ) {
+            let (design, values, dense) = matrix_of(events, sites, theta);
+            for kind in [FactorKind::Simplicial, FactorKind::Supernodal] {
+                check_selected_inverse(&design, &values, &dense, kind, 1e-9);
             }
         }
     }

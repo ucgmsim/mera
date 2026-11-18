@@ -39,7 +39,8 @@ Read them in this order. Each starts with a long comment that explains its step.
 | `src/factor.rs` | the sparse Cholesky factorisation, and what is read from it | the linear algebra |
 | `src/model.rs` | the REML criterion and the estimates | the statistics; start here if short of time |
 | `src/error.rs` | the two kinds of error | |
-| `src/testing.rs` | helpers used only by the tests | |
+| `src/testing.rs` | helpers used only by the tests | what a property test is |
+| `benches/engine.rs` | benchmarks: how long the engine's calls take | |
 | `../../src-rust/lib.rs` | the bridge to Python: `mera._lmm` | how numpy arrays reach Rust |
 
 One evaluation of the criterion runs through them like this:
@@ -189,6 +190,7 @@ Installing MERA from source builds this crate, so a
 uv sync --all-extras --dev   # builds the engine and installs it as mera._lmm
 cargo test                   # the Rust unit tests, at the bottom of each file
 uv run pytest                # the Python tests, which exercise the engine through mera
+cargo bench                  # the benchmarks: the time each call of the engine takes
 ```
 
 After editing a `.rs` file, `uv run ...` rebuilds the engine automatically. CI also runs
@@ -199,3 +201,18 @@ dense calculations. Whether the *statistics* are right is checked from Python: a
 R's lme4 (`tests/resources/lme4_reference`), against a brute-force calculation
 (`tests/test_criterion.py`), against closed-form answers (`tests/test_lmm.py`), and
 against the numpy walkthrough (`tests/test_maths_walkthrough.py`).
+
+Two of the Rust tests are *property tests* (their names end in `for_any_design`). Each
+checks a rule on 64 designs that the `proptest` library makes up afresh at every run:
+that the entries read from the selected inverse are those of an ordinary dense inverse,
+and that the two layouts of the factor give the same criterion, slope and estimates. If
+one fails, it prints the smallest design that it could find that breaks the rule, and
+saves it in a `proptest-regressions` folder. Commit that folder with the fix, so that
+the design is tried again at every later run.
+
+`cargo bench` times the engine's four calls on three synthetic designs
+(`benches/engine.rs`) with the `criterion` library. It prints each time with its spread
+and how it compares with the previous run, and writes a report with plots to
+`target/criterion/report/index.html`. On a pull request, CI runs the same benchmarks on
+the base branch and on the pull request, and posts the comparison as a comment
+(`.github/workflows/benchmarks.yml`).

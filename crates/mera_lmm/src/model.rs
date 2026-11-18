@@ -463,8 +463,37 @@ impl CrossedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::Lcg;
+    use crate::testing::{Lcg, two_factor_codes};
     use approx::{assert_abs_diff_eq, assert_relative_eq};
+    use proptest::prelude::*;
+
+    /// Checks that two models of the same data, one in each layout of the factor, give
+    /// the same criterion, slope and estimates at `theta`: numbers that are compared as
+    /// a ratio to within `relative`, the others to within `absolute`.
+    fn check_layouts_agree(
+        models: &mut [CrossedModel; 2],
+        theta: &[f64],
+        relative: f64,
+        absolute: f64,
+    ) {
+        let [(value, gradient), (expected_value, expected_gradient)] = models
+            .each_mut()
+            .map(|m| m.deviance_and_gradient(theta).unwrap());
+        assert_relative_eq!(value, expected_value, max_relative = relative);
+        assert_abs_diff_eq!(gradient[..], expected_gradient[..], epsilon = absolute);
+        let [fit, expected] = models.each_mut().map(|m| m.fit_at(theta).unwrap());
+        assert_relative_eq!(fit.deviance, expected.deviance, max_relative = relative);
+        assert_relative_eq!(fit.sigma, expected.sigma, max_relative = relative);
+        for (values, expected_values) in [
+            (&fit.beta, &expected.beta),
+            (&fit.beta_se, &expected.beta_se),
+            (&fit.beta_cov, &expected.beta_cov),
+            (&fit.ranef, &expected.ranef),
+            (&fit.condsd, &expected.condsd),
+        ] {
+            assert_abs_diff_eq!(values[..], expected_values[..], epsilon = absolute);
+        }
+    }
 
     #[test]
     fn supernodal_layout_gives_the_same_fits() {
@@ -475,18 +504,31 @@ mod tests {
             .map(|kind| random_model(1, true, kind));
         assert!(models[0].factor.is_simplicial() && !models[1].factor.is_simplicial());
         for theta in [[0.8, 1.3], [0.2, 0.6]] {
-            let [expected, fit] = models.each_mut().map(|m| m.fit_at(&theta).unwrap());
-            assert_relative_eq!(fit.deviance, expected.deviance, max_relative = 1e-12);
-            assert_relative_eq!(fit.sigma, expected.sigma, max_relative = 1e-12);
-            for (values, expected_values) in [
-                (&fit.beta, &expected.beta),
-                (&fit.beta_se, &expected.beta_se),
-                (&fit.beta_cov, &expected.beta_cov),
-                (&fit.ranef, &expected.ranef),
-                (&fit.condsd, &expected.condsd),
-            ] {
-                assert_abs_diff_eq!(values[..], expected_values[..], epsilon = 1e-10);
-            }
+            check_layouts_agree(&mut models, &theta, 1e-12, 1e-10);
+        }
+    }
+
+    proptest! {
+        // A property test (see `testing.rs`): at each run of the tests, 64 new random
+        // designs. (proptest's usual 256 would take several seconds in a debug build.)
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Whatever the design, theta, number of fixed effects and criterion (REML or
+        /// ML), the two layouts of the factor give the same results. `seed` sets the
+        /// random response and covariate.
+        #[test]
+        fn both_layouts_give_the_same_results_for_any_design(
+            (events, sites) in two_factor_codes(40, 25, 20..=300),
+            theta in [0.0f64..4.0, 0.0f64..4.0],
+            p in 0usize..=2,
+            reml in any::<bool>(),
+            seed in any::<u64>(),
+        ) {
+            let mut models = [FactorKind::Simplicial, FactorKind::Supernodal].map(|kind| {
+                let (events, sites) = (events.clone(), sites.clone());
+                model_of(events, sites, p, reml, kind, &mut Lcg::new(seed))
+            });
+            check_layouts_agree(&mut models, &theta, 1e-9, 1e-7);
         }
     }
 
@@ -497,6 +539,20 @@ mod tests {
         let n = 240;
         let events = (0..n).map(|_| rng.below(30)).collect();
         let sites = (0..n).map(|_| rng.below(18)).collect();
+        model_of(events, sites, p, reml, kind, &mut rng)
+    }
+
+    /// A model with the given event and site of each record and `p` fixed effects (an
+    /// intercept, then a covariate). The response and the covariate are drawn from `rng`.
+    fn model_of(
+        events: Vec<usize>,
+        sites: Vec<usize>,
+        p: usize,
+        reml: bool,
+        kind: FactorKind,
+        rng: &mut Lcg,
+    ) -> CrossedModel {
+        let n = events.len();
         let y: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
         let covariate: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
         // x is column-major: the column of ones, then the covariate

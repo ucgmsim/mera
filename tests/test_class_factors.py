@@ -2,8 +2,17 @@
 class, in which the observations of the other classes have no level."""
 
 import numpy as np
+import pandas as pd
 import pytest
-from example_data import SITE_CLASSES, add_site_classes, assert_matches_dense
+from example_data import (
+    CLASS_FITS,
+    SITE_CLASSES,
+    Lme4Fit,
+    add_site_classes,
+    assert_matches_dense,
+    assert_matches_lme4,
+    class_inputs,
+)
 
 from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import fit_lmm, split_by_class
@@ -47,6 +56,21 @@ def test_a_standard_deviation_per_class_matches_the_dense_implementation(
             fit.levels[1 + k], np.unique(sites[site_class == name])
         )
     assert_matches_dense(fit, dense, levels, y)
+
+
+@pytest.mark.parametrize("im, reml", CLASS_FITS)
+def test_a_standard_deviation_per_class_matches_lme4(
+    example_residuals: pd.DataFrame,
+    lme4_class_fits: dict[tuple[str, bool], Lme4Fit],
+    im: str,
+    reml: bool,
+) -> None:
+    """lme4's ``y ~ 1 + low + mid + (1|event) + (0 + high|site) + (0 + low|site) +
+    (0 + mid|site)``, by REML and by maximum likelihood, on the example data."""
+    y, groups, covariates = class_inputs(example_residuals, im)
+    fit = fit_lmm(y, groups, reml=reml, covariates=covariates)
+    assert fit.converged
+    assert_matches_lme4(fit, lme4_class_fits[im, reml], groups, covariates)
 
 
 def test_an_observation_gets_no_term_from_a_factor_it_is_not_in() -> None:

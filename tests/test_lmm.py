@@ -6,6 +6,7 @@ from example_data import (
     LME4_FITS,
     Lme4Fit,
     add_covariate_trend,
+    assert_matches_lme4,
     covariate_inputs,
     fit_inputs,
     groups_of,
@@ -13,32 +14,7 @@ from example_data import (
 )
 
 from mera.example import maths_walkthrough as walkthrough
-from mera.lmm import LmmFit, fit_lmm
-
-
-def assert_same_fit(
-    fit: LmmFit,
-    expected: Lme4Fit,
-    groups: list[np.ndarray],
-    covariates: np.ndarray | None = None,
-) -> None:
-    # The same optimum: never worse than lme4's, and equal to optimiser precision.
-    assert fit.deviance <= expected.deviance + 1e-8
-    assert fit.deviance == pytest.approx(expected.deviance, abs=1e-6)
-    np.testing.assert_allclose(fit.theta, expected.theta, atol=1e-5)
-    assert fit.sigma == pytest.approx(expected.sigma, abs=1e-7)
-    np.testing.assert_allclose(fit.beta, expected.beta, atol=1e-7)
-    np.testing.assert_allclose(fit.beta_se, expected.beta_se, atol=1e-7)
-    for got, want, levels, want_levels in zip(
-        fit.ranef, expected.ranef, fit.levels, expected.levels
-    ):
-        np.testing.assert_array_equal(levels, want_levels)
-        np.testing.assert_allclose(got, want, atol=1e-5)
-    for got, want in zip(fit.condsd, expected.condsd):
-        np.testing.assert_allclose(got, want, atol=1e-6)
-    np.testing.assert_allclose(
-        fit.fitted, expected.fitted(groups, covariates), atol=1e-5
-    )
+from mera.lmm import fit_lmm
 
 
 @pytest.mark.parametrize("data, intercept, site_term", LME4_FITS)
@@ -53,7 +29,7 @@ def test_matches_lme4(
     fit = fit_lmm(y, groups, intercept=intercept)
     expected = lme4_fits[data, intercept, site_term]
     assert fit.converged
-    assert_same_fit(fit, expected, groups)
+    assert_matches_lme4(fit, expected, groups)
     np.testing.assert_allclose(fit.resid, y - fit.fitted)
     # where lme4 ends exactly on the boundary (a singular fit), so must fit_lmm
     assert np.all(fit.theta[expected.theta == 0.0] == 0.0)
@@ -247,7 +223,7 @@ def test_covariates_match_lme4(
     fit = fit_lmm(y, groups, reml=reml, covariates=covariates)
     assert fit.converged
     assert fit.beta.shape == (3,)
-    assert_same_fit(fit, lme4_covariate_fits[im, reml], groups, covariates)
+    assert_matches_lme4(fit, lme4_covariate_fits[im, reml], groups, covariates)
 
 
 def covariate_data() -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:

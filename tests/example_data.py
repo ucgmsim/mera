@@ -5,11 +5,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 import mera
 from mera.example import maths_walkthrough as walkthrough
-from mera.lmm import LmmFit
+from mera.lmm import LmmFit, split_by_class
 
 DATA_DIR = Path(__file__).parent.parent / "mera" / "example" / "resources"
 MASK_CSV = Path(__file__).parent / "resources" / "mask.csv"
@@ -37,6 +36,9 @@ LME4_FITS = (
 )
 # The fits with covariates checked against lme4, as (IM, REML or ML): see covariate_inputs.
 COVARIATE_FITS = [("PGA", True), ("PGA", False)]
+# The fits with a site standard deviation per class checked against lme4, as (IM, REML or
+# ML): see class_inputs.
+CLASS_FITS = [("PGA", True), ("PGA", False)]
 # The criterion is also checked against lme4 at these (event, site) theta.
 CRITERION_IMS = ["PGA", "pSA_1.0"]
 CRITERION_THETAS = [(1.0, 1.0), (0.0, 0.7), (0.9, 0.0), (0.3, 2.0)]
@@ -176,9 +178,9 @@ def assert_matches_dense(
     assert fit.converged
     for level, expected in zip(levels, fit.levels):
         np.testing.assert_array_equal(level, expected)
-    assert dense.deviance == pytest.approx(fit.deviance, abs=1e-8)
+    np.testing.assert_allclose(dense.deviance, fit.deviance, rtol=0, atol=1e-8)
     np.testing.assert_allclose(dense.theta, fit.theta, atol=1e-6)
-    assert dense.sigma == pytest.approx(fit.sigma, abs=1e-7)
+    np.testing.assert_allclose(dense.sigma, fit.sigma, rtol=0, atol=1e-7)
     np.testing.assert_allclose(dense.sd, fit.sd, atol=1e-6)
     np.testing.assert_allclose(dense.beta, fit.beta, atol=1e-7)
     np.testing.assert_allclose(dense.beta_se, fit.beta_se, atol=1e-7)
@@ -189,9 +191,20 @@ def assert_matches_dense(
     np.testing.assert_allclose(fit.resid, y - fit.fitted)
 
 
+def class_inputs(
+    df: pd.DataFrame, im: str
+) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """The response, grouping factors and covariates of a fit in CLASS_FITS: an IM's
+    residuals with the class effects of :func:`add_site_classes`, the events and the
+    sites split into a factor per class, and the indicators of the classes."""
+    events, sites = groups_of(df, True)
+    y, site_class, covariates = add_site_classes(df[im].to_numpy(), sites)
+    return y, [events, *split_by_class(sites, site_class)], covariates
+
+
 @dataclass(frozen=True)
 class Lme4Fit:
-    """lme4's fit for an entry of LME4_FITS or COVARIATE_FITS, laid out like
+    """lme4's fit for an entry of LME4_FITS, COVARIATE_FITS or CLASS_FITS, laid out like
     :class:`mera.lmm.LmmFit`."""
 
     levels: list[np.ndarray]
@@ -207,59 +220,77 @@ class Lme4Fit:
         self, groups: list[np.ndarray], covariates: np.ndarray | None = None
     ) -> np.ndarray:
         """Fitted values of observations with these grouping-factor labels (and these
-        covariates, for a fit that has them after its intercept)."""
+        covariates, for a fit that has them after its intercept). An observation that
+        is masked in a factor gets no term from it."""
         fitted = np.full(len(groups[0]), self.beta[0] if self.beta.size else 0.0)
         if covariates is not None:
             fitted = fitted + covariates @ self.beta[1:]
-        for levels, ranef, labels in zip(self.levels, self.ranef, groups):
-            fitted = fitted + ranef[np.searchsorted(levels, labels.astype(str))]
+        for levels, ranef, group in zip(self.levels, self.ranef, groups):
+            in_factor = ~np.ma.getmaskarray(group)
+            labels = np.ma.getdata(group)[in_factor].astype(str)
+            fitted[in_factor] += ranef[np.searchsorted(levels, labels)]
         return fitted
 
 
-def load_lme4_fits() -> dict[tuple[str, bool, bool], Lme4Fit]:
-    """lme4's fits for LME4_FITS, keyed like it, from LME4_REFERENCE."""
-    effects = pd.read_csv(LME4_REFERENCE / "random_effects.csv").groupby(
-        ["data", "intercept", "site_term"]
-    )
-    out = {}
-    for row in pd.read_csv(LME4_REFERENCE / "fits.csv").to_dict("records"):
-        key = (str(row["data"]), bool(row["intercept"]), bool(row["site_term"]))
-        factors = [g for _, g in effects.get_group(key).groupby("factor", sort=False)]
-        out[key] = Lme4Fit(
-            levels=[g["level"].to_numpy(dtype=str) for g in factors],
-            theta=np.array([row["theta_event"], row["theta_site"]][: len(factors)]),
-            sigma=float(row["sigma"]),
-            beta=np.array([row["beta"]] if key[1] else []),
-            beta_se=np.array([row["beta_se"]] if key[1] else []),
-            ranef=[g["ranef"].to_numpy() for g in factors],
-            condsd=[g["condsd"].to_numpy() for g in factors],
-            deviance=float(row["deviance"]),
-        )
-    return out
+def load_lme4_reference(prefix: str, key_columns: list[str]) -> dict[tuple, Lme4Fit]:
+    """lme4's fits stored in ``<prefix>fits.csv`` and ``<prefix>random_effects.csv`` of
+    LME4_REFERENCE, keyed by their values in ``key_columns``.
 
+    The files of every group of fits have one layout. In the fits file, the columns
+    named ``theta_...`` hold theta (one per grouping factor), those named ``beta_...``
+    the fixed effects and those named ``se_...`` their standard errors, each in the
+    order of the model; an entry is empty if the fit does not have it. In the random
+    effects file, a fit's rows are grouped by factor, in the order of the factors.
+    """
+    fits = pd.read_csv(LME4_REFERENCE / f"{prefix}fits.csv")
+    effects = pd.read_csv(LME4_REFERENCE / f"{prefix}random_effects.csv")
+    effects = effects.groupby(key_columns)
 
-def load_lme4_covariate_fits() -> dict[tuple[str, bool], Lme4Fit]:
-    """lme4's fits for COVARIATE_FITS, keyed like it, from LME4_REFERENCE."""
-    effects = pd.read_csv(LME4_REFERENCE / "covariate_random_effects.csv").groupby(
-        ["im", "reml"]
-    )
+    def values(row: dict, start: str) -> np.ndarray:
+        named = [row[c] for c in fits.columns if c.startswith(start)]
+        return np.array([value for value in named if not pd.isna(value)])
+
     out = {}
-    fits = pd.read_csv(LME4_REFERENCE / "covariate_fits.csv")
     for row in fits.to_dict("records"):
-        key = (str(row["im"]), bool(row["reml"]))
+        key = tuple(row[c] for c in key_columns)
         factors = [g for _, g in effects.get_group(key).groupby("factor", sort=False)]
         out[key] = Lme4Fit(
             levels=[g["level"].to_numpy(dtype=str) for g in factors],
-            theta=np.array([row["theta_event"], row["theta_site"]]),
+            theta=values(row, "theta_"),
             sigma=float(row["sigma"]),
-            # the intercept, then the covariates in the order of their columns
-            beta=np.array([row[c] for c in fits.columns if c.startswith("beta_")]),
-            beta_se=np.array([row[c] for c in fits.columns if c.startswith("se_")]),
+            beta=values(row, "beta_"),
+            beta_se=values(row, "se_"),
             ranef=[g["ranef"].to_numpy() for g in factors],
             condsd=[g["condsd"].to_numpy() for g in factors],
             deviance=float(row["deviance"]),
         )
     return out
+
+
+def assert_matches_lme4(
+    fit: LmmFit,
+    expected: Lme4Fit,
+    groups: list[np.ndarray],
+    covariates: np.ndarray | None = None,
+) -> None:
+    """The fit is at lme4's optimum: never worse than lme4's criterion, and equal to it
+    and to lme4's estimates to the precision of the search."""
+    assert fit.deviance <= expected.deviance + 1e-8
+    np.testing.assert_allclose(fit.deviance, expected.deviance, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(fit.theta, expected.theta, atol=1e-5)
+    np.testing.assert_allclose(fit.sigma, expected.sigma, rtol=0, atol=1e-7)
+    np.testing.assert_allclose(fit.beta, expected.beta, atol=1e-7)
+    np.testing.assert_allclose(fit.beta_se, expected.beta_se, atol=1e-7)
+    for got, want, levels, want_levels in zip(
+        fit.ranef, expected.ranef, fit.levels, expected.levels
+    ):
+        np.testing.assert_array_equal(levels, want_levels)
+        np.testing.assert_allclose(got, want, atol=1e-5)
+    for got, want in zip(fit.condsd, expected.condsd):
+        np.testing.assert_allclose(got, want, atol=1e-6)
+    np.testing.assert_allclose(
+        fit.fitted, expected.fitted(groups, covariates), atol=1e-5
+    )
 
 
 def reference_mask(res_df: pd.DataFrame) -> pd.DataFrame:

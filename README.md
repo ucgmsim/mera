@@ -220,7 +220,7 @@ describes what else can be fitted and where in the source to change it:
 
 - without changing any code: no bias, no site term, extra or nested grouping factors
   (regions, networks), fixed effects such as a trend with magnitude, distance or Vs30,
-  maximum likelihood;
+  a separate standard deviation for each class of site, maximum likelihood;
 - with small changes to the Python: extra terms and covariates in `run_mera`'s tables;
 - what would need the Rust engine changed, such as random slopes.
 

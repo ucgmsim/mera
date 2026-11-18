@@ -37,7 +37,8 @@ each event".
 | a grouping inside another (stations within networks) | [1.3](#13-a-grouping-inside-another) | a call to `fit_lmm` |
 | a trend with magnitude, distance, Vs30, ..., or an offset per site class | [1.4](#14-a-trend-with-a-covariate) | an argument of `fit_lmm` |
 | maximum likelihood instead of REML | [1.5](#15-maximum-likelihood-and-comparing-models) | an argument of `fit_lmm` |
-| the same model many times, as in a bootstrap | [1.6](#16-many-similar-fits) | an argument of `fit_lmm` |
+| a separate standard deviation for each class of site (or of event) | [1.6](#16-a-separate-standard-deviation-per-class) | a call to `fit_lmm` |
+| the same model many times, as in a bootstrap | [1.7](#17-many-similar-fits) | an argument of `fit_lmm` |
 | an extra grouping reported in `run_mera`'s tables | [2.1](#21-report-another-grouping-factor-from-run_mera) | Python edits |
 | covariates in `run_mera`, for every IM | [2.2](#22-covariates-in-run_mera) | Python edits |
 | terms that vary with a covariate, unequal residual scatter, ... | [3](#3-what-would-need-the-rust-engine-changed) | Rust changes, or other software |
@@ -199,7 +200,60 @@ cannot be negative. The
 [lme4 book](https://people.math.ethz.ch/~maechler/MEMo-pages/lMMwR.pdf) discusses these
 tests.
 
-### 1.6 Many similar fits
+### 1.6 A separate standard deviation per class
+
+Suppose the sites fall into classes (ridge, valley and flat ground, say), and the site
+terms of one class may be more scattered than those of another:
+
+```
+residual = bias + class offset + event term + site term + remaining residual
+           where the site terms of each class have their own standard deviation
+```
+
+With one grouping factor for the sites, as in [1.2](#12-more-grouping-factors), all the
+site terms share one standard deviation. `split_by_class` turns that factor into one per
+class, and each gets its own:
+
+```python
+from mera.lmm import fit_lmm, split_by_class
+
+# sites and site_class have one entry per record: its site, and the class of that site
+classes = np.unique(site_class)  # sorted: the order of the factors of split_by_class
+fit = fit_lmm(
+    y,
+    [events, *split_by_class(sites, site_class)],
+    covariates=np.column_stack([site_class == name for name in classes[1:]]),
+)
+tau = fit.sd[0]
+phi_s2s = dict(zip(classes, fit.sd[1:]))  # {"flat": 0.31, "ridge": 0.52, "valley": 0.44}
+```
+
+The `*` unpacks the list that `split_by_class` returns, so the grouping factors are the
+events followed by one factor per class. A record belongs to the factor of its own class
+only: it has no level in the others, and gets no term from them. In lme4's notation this
+is `(1|event) + (0 + flat|site) + (0 + ridge|site) + (0 + valley|site)`.
+
+The results follow the factors, as always: `fit.levels[1]`, `fit.ranef[1]` and
+`fit.condsd[1]` are the sites of the first class with their terms and the conditional
+standard deviations of those, index 2 holds the second class, and so on.
+
+Things to keep in mind:
+
+- **Give each class its own mean as well.** The covariates above are an indicator for
+  every class but the first ([1.4](#14-a-trend-with-a-covariate)), so that each class has
+  an offset. Without them, a difference between the means of the classes would have to
+  be taken up by the site terms, and would inflate their standard deviations.
+- A class needs at least two sites, and its standard deviation is only as well
+  determined as the number of its sites allows.
+- To judge whether the classes really differ in scatter, compare the deviance with that
+  of the fit with one factor for all the sites and the same covariates
+  ([1.5](#15-maximum-likelihood-and-comparing-models)). The fixed effects are the same
+  in both fits, so their REML deviances can be compared. Three classes add two standard
+  deviations: a fall of more than 5.99 is significant at the 5% level.
+- Any grouping factor can be split this way, the events by tectonic type for instance,
+  and more than one factor at a time.
+
+### 1.7 Many similar fits
 
 A bootstrap refits resampled versions of one dataset, hundreds of times. Each fit searches
 for its `theta` from scratch unless it is told where to start. The `theta` of the fit of
@@ -294,7 +348,8 @@ The engine in `crates/mera_lmm` is fast because it is specialised. It assumes th
 1. every random effect is a single number per level that is *added* to all the records of
    that level (a "random intercept");
 2. each grouping factor has one standard deviation, and its terms are independent of each
-   other and of the other factors' terms;
+   other and of the other factors' terms (a factor can be split into classes that each
+   have their own: [1.6](#16-a-separate-standard-deviation-per-class));
 3. the remaining residuals all have the same standard deviation;
 4. everything is normally distributed.
 

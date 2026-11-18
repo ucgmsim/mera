@@ -146,6 +146,11 @@ y = X\beta + Zb + \varepsilon
   gives each record the sum of its own event term and site term.
 - **ε** holds the remaining residuals.
 
+This is the model of `run_mera`. `fit_lmm` fits others of the same form: covariates are
+more columns of X, each with a coefficient of its own in β, and a record can be left out
+of a grouping factor, in which case its row of Z has only zeros in that factor's columns.
+[Fitting a different model](adding_models.md) describes what they are for.
+
 For example, take five records of three events (0, 1, 2) at two sites (0, 1):
 
 ```

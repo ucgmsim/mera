@@ -1,0 +1,34 @@
+[package]
+name = "mera_lmm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Profiled REML for linear mixed models with crossed random intercepts (mera's numerical core)"
+publish = false
+
+[dependencies]
+# Pure-Rust sparse Cholesky: no BLAS, no SuiteSparse.
+faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg"] }
+thiserror = "2"
+
+[dev-dependencies]
+# Comparisons of floating-point numbers within a tolerance, in the tests.
+approx = "0.5"
+# The benchmarks in `benches/` (`cargo bench`), with HTML reports in `target/criterion`.
+criterion = { version = "0.5", features = ["html_reports"] }
+# Property tests: rules that are checked on many randomly generated designs.
+proptest = "1"
+
+# Flamegraphs from the benchmarks (`cargo bench -- --profile-time 5`). pprof does not
+# build on Windows, so it is only used elsewhere.
+[target.'cfg(unix)'.dev-dependencies]
+pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
+
+# `harness = false` hands the benchmark's `main` to criterion.
+[[bench]]
+name = "engine"
+harness = false
+
+[lints]
+workspace = true

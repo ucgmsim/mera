@@ -1,0 +1,21 @@
+# Rust
+/target/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+.venv/
+# coverage data and reports
+.coverage
+.coverage.*
+htmlcov/
+# extension module built in place by editable installs
+mera/_lmm*.so
+mera/_lmm*.pyd
+# example output
+/mera/example/residuals/
+# IDEs
+.idea/
+.vscode/

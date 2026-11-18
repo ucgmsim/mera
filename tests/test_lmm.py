@@ -1,0 +1,620 @@
+from types import SimpleNamespace
+from typing import Any, cast
+
+import numpy as np
+import pandas as pd
+import pytest
+from example_data import (
+    COVARIATE_FITS,
+    LME4_FITS,
+    Lme4Fit,
+    add_covariate_trend,
+    assert_matches_lme4,
+    covariate_inputs,
+    fit_inputs,
+    groups_of,
+    synthetic,
+)
+
+from mera.example import maths_walkthrough as walkthrough
+from mera.lmm import _encode_labels, _search, fit_lmm
+
+
+@pytest.mark.parametrize("data, intercept, site_term", LME4_FITS)
+def test_matches_lme4(
+    example_residuals: pd.DataFrame,
+    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
+    data: str,
+    intercept: bool,
+    site_term: bool,
+) -> None:
+    y, groups = fit_inputs(example_residuals, data, site_term)
+    fit = fit_lmm(y, groups, intercept=intercept)
+    expected = lme4_fits[data, intercept, site_term]
+    assert fit.converged
+    assert_matches_lme4(fit, expected, groups)
+    np.testing.assert_allclose(fit.resid, y - fit.fitted)
+    # where lme4 ends exactly on the boundary (a singular fit), so must fit_lmm
+    assert np.all(fit.theta[expected.theta == 0.0] == 0.0)
+    for k in np.flatnonzero(fit.theta == 0.0):
+        assert np.all(fit.ranef[k] == 0.0) and np.all(fit.condsd[k] == 0.0)
+
+
+@pytest.mark.parametrize("seed", [45, 48])
+def test_singular_fit_reports_exact_zero(
+    example_residuals: pd.DataFrame, seed: int
+) -> None:
+    """With no event effect, lme4 returns theta_event == 0 exactly (isSingular) here."""
+    y = synthetic(example_residuals, "no_event_effect", seed=seed)
+    fit = fit_lmm(y, groups_of(example_residuals, True))
+    assert fit.theta[0] == 0.0
+    assert np.all(fit.ranef[0] == 0.0) and np.all(fit.condsd[0] == 0.0)
+
+
+def test_doubly_singular_fit_reports_exact_zeros(
+    example_residuals: pd.DataFrame,
+) -> None:
+    """Both variances are zero here, as lme4 also finds. A search can stop ~1e-16
+    (rounding) above the bound in theta^2, which must not come out as theta ~ 1e-8."""
+    y = synthetic(example_residuals, "weak_effects", seed=138)
+    fit = fit_lmm(y, groups_of(example_residuals, True))
+    np.testing.assert_array_equal(fit.theta, 0.0)
+
+
+def test_weak_effect_is_not_fitted_as_zero(example_residuals: pd.DataFrame) -> None:
+    """theta_event = 0 is a stationary point of the criterion in theta, but here the
+    criterion falls as theta_event grows (lme4 finds theta_event = 0.021), so the event
+    term must stay in the fit."""
+    df = example_residuals
+    y = synthetic(df, "weak_effects", seed=133)
+    fit = fit_lmm(y, groups_of(df, True), intercept=False)
+    # theta_event = 0 is the site-only model
+    site_only = fit_lmm(y, [df["stat_id"].to_numpy()], intercept=False)
+    assert fit.theta[0] > 0.0
+    assert fit.deviance < site_only.deviance - 1e-3
+
+
+def balanced_design(
+    n_events: int, n_sites: int, sd_event: float, sd_site: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A response with residual SD 1 where every site records every event exactly once,
+    with the event and site label of each observation."""
+    rng = np.random.default_rng(3)
+    events = np.repeat(np.arange(n_events), n_sites)
+    sites = np.tile(np.arange(n_sites), n_events)
+    y = (
+        0.2
+        + sd_event * rng.normal(size=n_events)[events]
+        + sd_site * rng.normal(size=n_sites)[sites]
+        + rng.normal(size=events.size)
+    )
+    return y, events, sites
+
+
+def anova_estimates(
+    y: np.ndarray, n_events: int, n_sites: int
+) -> tuple[np.ndarray, float]:
+    """REML's (theta_event, theta_site) and sigma for :func:`balanced_design`, in closed
+    form.
+
+    For a balanced design, the REML estimates are the textbook two-way analysis of
+    variance (ANOVA) ones, as long as those are positive (Searle, Casella & McCulloch
+    1992, *Variance Components*, section 4.7): the residual variance is the residual mean
+    square, and each factor's variance is its mean square less the residual one, over the
+    number of observations per level.
+    """
+    table = y.reshape(n_events, n_sites)
+    event_means = table.mean(axis=1, keepdims=True)
+    site_means = table.mean(axis=0, keepdims=True)
+    mean = table.mean()
+    ms_event = n_sites * ((event_means - mean) ** 2).sum() / (n_events - 1)
+    ms_site = n_events * ((site_means - mean) ** 2).sum() / (n_sites - 1)
+    ms_residual = ((table - event_means - site_means + mean) ** 2).sum() / (
+        (n_events - 1) * (n_sites - 1)
+    )
+    variance_ratios = np.array(
+        [
+            (ms_event / ms_residual - 1) / n_sites,
+            (ms_site / ms_residual - 1) / n_events,
+        ]
+    )
+    return np.sqrt(variance_ratios), float(np.sqrt(ms_residual))
+
+
+@pytest.mark.parametrize("sd_event", [1.0, 30.0, 300.0])
+@pytest.mark.parametrize("sd_site", [0.5, 200.0])
+def test_matches_anova_on_a_balanced_design(sd_event: float, sd_site: float) -> None:
+    """The optimiser must reach the optimum when a random effect is far larger than the
+    residual. Optimising theta^2, it stopped 1.5% short at a ratio of 300, and still
+    reported convergence.
+
+    The fits are within 1e-9 of the ANOVA estimates here. A search that only compared
+    values of the criterion came within 5e-5: the rounding error of the criterion, which
+    grows with the ratio, hid the rest from it.
+    """
+    n_events, n_sites = 30, 12
+    y, events, sites = balanced_design(n_events, n_sites, sd_event, sd_site)
+    theta, sigma = anova_estimates(y, n_events, n_sites)
+    fit = fit_lmm(y, [events, sites])
+    assert fit.converged
+    np.testing.assert_allclose(fit.theta, theta, rtol=1e-7)
+    assert fit.sigma == pytest.approx(sigma, rel=1e-7)
+
+
+@pytest.mark.parametrize("offset", [1e4, 1e6])
+def test_a_large_mean_costs_no_precision(
+    example_residuals: pd.DataFrame,
+    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
+    offset: float,
+) -> None:
+    """Adding a constant to the response must move the intercept and nothing else.
+
+    The engine finds the residual sum of squares by subtraction, which loses digits when
+    the mean of the response is far larger than its spread: fitted as given, a response
+    with a mean of 1e4 had theta out by 1e-4, and with 1e6 by 0.3, both reported as
+    converged.
+    """
+    y, groups = fit_inputs(example_residuals, "PGA", True)
+    expected = lme4_fits["PGA", True, True]
+    fit = fit_lmm(y + offset, groups)
+    assert fit.converged
+    np.testing.assert_allclose(fit.theta, expected.theta, atol=1e-5)
+    assert fit.sigma == pytest.approx(expected.sigma, abs=1e-6)
+    assert fit.beta[0] - offset == pytest.approx(expected.beta[0], abs=1e-6)
+    np.testing.assert_allclose(fit.beta_se, expected.beta_se, atol=1e-6)
+    for got, want in zip(fit.ranef, expected.ranef):
+        np.testing.assert_allclose(got, want, atol=1e-5)
+    np.testing.assert_allclose(fit.fitted - offset, expected.fitted(groups), atol=1e-5)
+    np.testing.assert_allclose(fit.resid, y - expected.fitted(groups), atol=1e-5)
+
+
+def test_rejects_designs_lme4_rejects() -> None:
+    """lme4 stops on these: a single level, or as many levels as observations."""
+    y = np.array([0.3, -0.2, 0.5, 0.1, -0.4, 0.2])
+    one_event = np.array(["e1"] * 6)
+    three_events = np.array(["e1", "e1", "e2", "e2", "e3", "e3"])
+    with pytest.raises(ValueError, match="more than one level"):
+        fit_lmm(y, [one_event])
+    with pytest.raises(ValueError, match="more than one level"):
+        fit_lmm(y, [one_event, np.array(["s1", "s2"] * 3)])
+    with pytest.raises(ValueError, match="fewer levels than observations"):
+        fit_lmm(y, [three_events, np.arange(6)])
+
+
+def test_rejects_missing_group_labels() -> None:
+    """A missing event or site id must not become a level called "nan" or "None"."""
+    y = np.array([0.3, -0.2, 0.5, 0.1])
+    with pytest.raises(ValueError, match="missing"):
+        fit_lmm(y, [np.array(["a", None, "b", "b"], dtype=object)])
+    with pytest.raises(ValueError, match="missing"):
+        fit_lmm(y, [np.array([1.0, np.nan, 2.0, 2.0])])
+
+
+def test_rejects_invalid_input() -> None:
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    g = np.array(["a", "a", "b", "b"])
+    with pytest.raises(ValueError, match="NaN"):
+        fit_lmm(np.array([1.0, np.nan, 3.0, 4.0]), [g])
+    with pytest.raises(ValueError, match="one label per observation"):
+        fit_lmm(y, [g[:3]])
+    with pytest.raises(ValueError, match="grouping factor"):
+        fit_lmm(y, [])
+    with pytest.raises(ValueError, match="one-dimensional"):
+        fit_lmm(y.reshape(2, 2), [g])
+    with pytest.raises(ValueError, match="constant"):
+        fit_lmm(np.full(4, 2.0), [g])
+
+
+def test_errors_note_what_was_being_fitted() -> None:
+    g = np.array(["a", "a", "b", "b"])
+    # one error from fit_lmm's own checks, one from the engine (a constant response)
+    for y in [np.array([1.0, 2.0, 3.0]), np.full(4, 2.0)]:
+        with pytest.raises(ValueError) as error:
+            fit_lmm(y, [g], name="IM PGA")
+        assert error.value.__notes__ == ["while fitting IM PGA"]
+
+
+@pytest.mark.parametrize("im, reml", COVARIATE_FITS)
+def test_covariates_match_lme4(
+    example_residuals: pd.DataFrame,
+    lme4_covariate_fits: dict[tuple[str, bool], Lme4Fit],
+    im: str,
+    reml: bool,
+) -> None:
+    """Fixed effects beside the bias, by REML and by maximum likelihood: lme4's
+    ``y ~ 1 + magnitude + distance + (1|event) + (1|site)``."""
+    y, groups, covariates = covariate_inputs(example_residuals, im)
+    fit = fit_lmm(y, groups, reml=reml, covariates=covariates)
+    assert fit.converged
+    assert fit.beta.shape == (3,)
+    assert_matches_lme4(fit, lme4_covariate_fits[im, reml], groups, covariates)
+
+
+def covariate_data() -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """The small example of the walkthrough with a trend in two made-up covariates:
+    the response, its groups (events, sites) and the covariates."""
+    return add_covariate_trend(*walkthrough.make_example_data())
+
+
+def test_a_trend_added_to_the_response_goes_to_its_coefficient() -> None:
+    """Adding c times a covariate to the response must raise that covariate's
+    coefficient by c and change nothing else."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    shifted = fit_lmm(y + 0.75 * covariates[:, 1], groups, covariates=covariates)
+    np.testing.assert_allclose(shifted.beta - base.beta, [0.0, 0.0, 0.75], atol=1e-7)
+    np.testing.assert_allclose(shifted.beta_se, base.beta_se, atol=1e-7)
+    np.testing.assert_allclose(shifted.theta, base.theta, atol=1e-6)
+    assert shifted.sigma == pytest.approx(base.sigma, abs=1e-7)
+    for got, want in zip(shifted.ranef, base.ranef):
+        np.testing.assert_allclose(got, want, atol=1e-6)
+    np.testing.assert_allclose(shifted.resid, base.resid, atol=1e-6)
+
+
+def test_moving_a_covariate_by_a_constant_moves_only_the_intercept() -> None:
+    """With an intercept, a covariate less a typical value fits the same model: its
+    coefficient stays, and the intercept becomes the mean at that typical value."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    moved = fit_lmm(y, groups, covariates=covariates - [6.0, 0.0])
+    np.testing.assert_allclose(moved.beta[1:], base.beta[1:], atol=1e-7)
+    assert moved.beta[0] == pytest.approx(base.beta[0] + 6.0 * base.beta[1], abs=1e-6)
+    np.testing.assert_allclose(moved.beta_se[1:], base.beta_se[1:], atol=1e-7)
+    np.testing.assert_allclose(moved.theta, base.theta, atol=1e-6)
+    np.testing.assert_allclose(moved.fitted, base.fitted, atol=1e-6)
+
+
+def test_one_covariate_may_be_a_vector() -> None:
+    y, groups, covariates = covariate_data()
+    as_vector = fit_lmm(y, groups, covariates=covariates[:, 0])
+    as_column = fit_lmm(y, groups, covariates=covariates[:, :1])
+    assert as_vector.beta.shape == (2,)
+    np.testing.assert_array_equal(as_vector.beta, as_column.beta)
+    np.testing.assert_array_equal(as_vector.fitted, as_column.fitted)
+
+
+def test_no_covariates_is_the_model_without_them() -> None:
+    """An empty set of covariates (n x 0) is the same as none."""
+    y, groups, _ = covariate_data()
+    plain = fit_lmm(y, groups)
+    empty = fit_lmm(y, groups, covariates=np.empty((y.size, 0)))
+    np.testing.assert_array_equal(empty.beta, plain.beta)
+    np.testing.assert_array_equal(empty.theta, plain.theta)
+
+
+def test_rejects_invalid_covariates() -> None:
+    y, groups, covariates = covariate_data()
+    with pytest.raises(ValueError, match="one row per observation"):
+        fit_lmm(y, groups, covariates=covariates[:-1])
+    with pytest.raises(ValueError, match="one row per observation"):
+        fit_lmm(y, groups, covariates=covariates.T)
+    with pytest.raises(ValueError, match="at most two-dimensional"):
+        fit_lmm(y, groups, covariates=covariates[:, :, None])
+    with_nan = covariates.copy()
+    with_nan[3, 1] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        fit_lmm(y, groups, covariates=with_nan)
+    # magnitude and magnitude + 1, with an intercept, cannot be told apart
+    collinear = np.column_stack([covariates[:, 0], covariates[:, 0] + 1.0])
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=collinear)
+    # an indicator for every class, with an intercept: they add up to the intercept
+    classes = np.arange(y.size) % 3
+    indicators = np.column_stack([classes == k for k in range(3)])
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=indicators)
+    # a covariate that is zero for every record
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=np.zeros(y.size))
+    # without the intercept, the same indicators are a valid model
+    assert fit_lmm(y, groups, covariates=indicators, intercept=False).beta.shape == (3,)
+
+
+def test_a_start_at_the_optimum_saves_evaluations(
+    example_residuals: pd.DataFrame,
+) -> None:
+    """A search that starts from the theta of an earlier fit of the same data ends at
+    the same optimum, in fewer evaluations (5 against 9 here). A start that is only
+    near the optimum, as for refits of similar data, saves none: see fit_lmm's notes."""
+    y, groups = fit_inputs(example_residuals, "PGA", True)
+    cold = fit_lmm(y, groups)
+    warm = fit_lmm(y, groups, start=cold.theta)
+    assert warm.converged
+    np.testing.assert_allclose(warm.theta, cold.theta, atol=1e-6)
+    assert warm.deviance == pytest.approx(cold.deviance, abs=1e-8)
+    assert warm.n_evals < 0.8 * cold.n_evals
+
+
+@pytest.mark.parametrize("start", [(0.0, 0.0), (0.0, 0.2), (50.0, 50.0)])
+def test_the_optimum_does_not_depend_on_the_start(
+    example_residuals: pd.DataFrame, start: tuple[float, float]
+) -> None:
+    """Not even from a start on the boundary (theta = 0) when the optimum is inside it:
+    here lme4 finds theta_event = 0.021."""
+    df = example_residuals
+    y = synthetic(df, "weak_effects", seed=133)
+    groups = groups_of(df, True)
+    expected = fit_lmm(y, groups, intercept=False)
+    fit = fit_lmm(y, groups, intercept=False, start=start)
+    assert fit.converged
+    assert fit.theta[0] > 0.0
+    np.testing.assert_allclose(fit.theta, expected.theta, atol=1e-6)
+
+
+def test_rejects_invalid_start() -> None:
+    y, groups, _ = covariate_data()
+    with pytest.raises(ValueError, match="one value of theta per grouping factor"):
+        fit_lmm(y, groups, start=[1.0])
+    with pytest.raises(ValueError, match="one value of theta per grouping factor"):
+        fit_lmm(y, groups, start=1.0)
+    # negative, not a number, or beyond the limit of the search (MAX_THETA)
+    for bad in [-0.5, np.nan, np.inf, 1e9]:
+        with pytest.raises(ValueError, match="start must be"):
+            fit_lmm(y, groups, start=[1.0, bad])
+
+
+def test_the_units_of_a_covariate_do_not_matter() -> None:
+    """Measuring a covariate in other units, however small or large, must rescale its
+    coefficient and change nothing else: it must not make the model look collinear."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    for scale in [1e-15, 1e15]:
+        scaled = fit_lmm(y, groups, covariates=covariates * [scale, 1.0])
+        np.testing.assert_allclose(
+            scaled.beta * [1.0, scale, 1.0], base.beta, rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            scaled.beta_se * [1.0, scale, 1.0], base.beta_se, rtol=1e-6
+        )
+        np.testing.assert_allclose(scaled.theta, base.theta, atol=1e-6)
+
+
+@pytest.mark.parametrize("offset", [1e4, 1e6])
+def test_a_large_mean_costs_no_precision_without_an_intercept(offset: float) -> None:
+    """An indicator for every class and no intercept is the same model as an intercept
+    with all classes but one. Adding a constant to the response must then move every
+    class coefficient by that constant and nothing else. Fitted as given, a response
+    with a mean of 1e4 had theta out by 2e-4, and with 1e6 by 0.6, both reported as
+    converged."""
+    y, groups, _ = covariate_data()
+    classes = np.arange(y.size) % 3
+    indicators = np.column_stack([classes == k for k in range(3)]).astype(float)
+    base = fit_lmm(y, groups, covariates=indicators, intercept=False)
+    shifted = fit_lmm(y + offset, groups, covariates=indicators, intercept=False)
+    assert shifted.converged
+    np.testing.assert_allclose(shifted.theta, base.theta, atol=1e-6)
+    assert shifted.sigma == pytest.approx(base.sigma, abs=1e-7)
+    np.testing.assert_allclose(shifted.beta - offset, base.beta, atol=1e-6)
+    np.testing.assert_allclose(shifted.beta_se, base.beta_se, atol=1e-7)
+    for got, want in zip(shifted.ranef, base.ranef):
+        np.testing.assert_allclose(got, want, atol=1e-6)
+    np.testing.assert_allclose(shifted.resid, base.resid, atol=1e-6)
+
+
+@pytest.mark.parametrize("noise", [0.0, 1e-9, 1e-6])
+@pytest.mark.parametrize("seed", [0, 1, 2, 5])
+def test_no_residual_variation_is_one_clear_error(noise: float, seed: int) -> None:
+    """Data that the events and sites explain exactly, or almost, cannot be fitted:
+    nothing is left to estimate sigma from, and theta grows without end. The search
+    now stops at a limit on theta and says so. Without the limit it ran until the
+    arithmetic failed, with one of three unrelated errors depending on rounding, and
+    with a little noise it sometimes returned a fit with theta in the hundreds of
+    thousands."""
+    _, events, sites = walkthrough.make_example_data()
+    rng = np.random.default_rng(seed)
+    event_levels, event_codes = np.unique(events, return_inverse=True)
+    site_levels, site_codes = np.unique(sites, return_inverse=True)
+    y = (
+        0.2
+        + 0.5 * rng.normal(size=event_levels.size)[event_codes]
+        + 0.4 * rng.normal(size=site_levels.size)[site_codes]
+        + noise * rng.normal(size=events.size)
+    )
+    with pytest.raises(ValueError, match="explain the response almost exactly"):
+        fit_lmm(y, [events, sites])
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        np.array([3, 10, 2, 10, 3, 3]),
+        np.array(["s3", "s10", "s2", "s10", "s3", "s3"]),
+        np.array(["s3", "s10", "s2", "s10", "s3", "s3"], dtype=object),
+        pd.Series(["s3", "s10", "s2", "s10", "s3", "s3"]).to_numpy(),
+        np.array([True, False, True, True, False, True]),
+        np.array([1.5, 2.0, 1.5, 10.0, 2.0, 1.5]),
+        # 1 and 1.0 are equal numbers with different strings: two levels, "1" and "1.0"
+        np.array([1, 1.0, "1", 2, 1.0, 1], dtype=object),
+        np.array(["2026-01-02", "2025-12-31", "2026-01-02"], dtype="datetime64[D]"),
+    ],
+    ids=["int", "str", "object str", "pandas str", "bool", "float", "mixed", "date"],
+)
+def test_labels_are_encoded_as_their_sorted_strings(labels: np.ndarray) -> None:
+    """The levels are the distinct labels as strings, sorted, and the codes their
+    positions: what np.unique gives for the labels as strings, however it is found."""
+    expected_levels, expected_codes = np.unique(labels.astype(str), return_inverse=True)
+    levels, codes = _encode_labels(labels)
+    np.testing.assert_array_equal(levels, expected_levels)
+    np.testing.assert_array_equal(codes, expected_codes)
+    assert codes.dtype == np.int64
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        np.array(["a", None, "b", "a"], dtype=object),
+        np.array([1.0, np.nan, 2.0, 1.0]),
+        np.array(["a", np.nan, 3, "a"], dtype=object),
+    ],
+    ids=["str", "float", "mixed"],
+)
+def test_a_missing_label_has_no_code(labels: np.ndarray) -> None:
+    levels, codes = _encode_labels(labels)
+    assert codes[1] == -1 and np.all(np.delete(codes, 1) >= 0)
+    assert levels.size == 2
+
+
+@pytest.mark.parametrize("offset", [1e4, 1e6])
+def test_a_covariate_with_a_large_mean_costs_no_precision(offset: float) -> None:
+    """A covariate that is far from zero compared with its spread, such as a year or a
+    coordinate in metres, must fit as well as the same covariate less a constant.
+    Fitted as given, covariates with a mean of 1e4 had theta out by 1e-4, and with 1e6
+    by 6e-3, reported as converged."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    moved = fit_lmm(y, groups, covariates=covariates + offset)
+    assert moved.converged
+    np.testing.assert_allclose(moved.theta, base.theta, atol=1e-6)
+    assert moved.sigma == pytest.approx(base.sigma, abs=1e-7)
+    np.testing.assert_allclose(moved.beta[1:], base.beta[1:], atol=1e-7)
+    np.testing.assert_allclose(moved.beta_se[1:], base.beta_se[1:], atol=1e-7)
+    # the intercept is now the mean where both covariates are zero, far from the data
+    expected_intercept = base.beta[0] - offset * base.beta[1:].sum()
+    assert moved.beta[0] == pytest.approx(expected_intercept, rel=1e-7)
+    np.testing.assert_allclose(moved.fitted, base.fitted, atol=1e-6)
+
+
+def test_nearly_collinear_covariates_cost_no_precision() -> None:
+    """Two covariates that are almost the same describe the same model as one of them
+    and their difference. Their coefficients are large and poorly determined, but
+    theta and the fitted values must not suffer: fitted as given, theta was out by
+    up to 1e-2."""
+    y, groups, covariates = covariate_data()
+    first, second = covariates.T
+    base = fit_lmm(y, groups, covariates=covariates)
+    close = fit_lmm(
+        y, groups, covariates=np.column_stack([first, first + 1e-6 * second])
+    )
+    assert close.converged
+    np.testing.assert_allclose(close.theta, base.theta, atol=1e-6)
+    np.testing.assert_allclose(close.fitted, base.fitted, atol=1e-6)
+    # b1 * first + b2 * second = (b1 - b2 / 1e-6) * first + (b2 / 1e-6) * (first + 1e-6 * second)
+    assert close.beta[2] == pytest.approx(base.beta[2] / 1e-6, rel=1e-6)
+
+
+def test_beta_cov_is_the_covariance_of_the_fixed_effects() -> None:
+    y, groups, covariates = covariate_data()
+    fit = fit_lmm(y, groups, covariates=covariates)
+    assert fit.beta_cov.shape == (3, 3)
+    np.testing.assert_allclose(fit.beta_cov, fit.beta_cov.T, rtol=1e-10)
+    np.testing.assert_allclose(np.sqrt(np.diag(fit.beta_cov)), fit.beta_se, rtol=1e-12)
+    # sigma^2 (X'V^-1X)^-1 from the dense implementation, at the same theta
+    x = np.column_stack([np.ones(y.size), covariates])
+    z, level_factor, _ = walkthrough.indicator_matrix(groups)
+    at = walkthrough.evaluate(fit.theta, walkthrough.Model(y, x, z, level_factor))
+    expected = at.r2 / at.dof * np.linalg.inv(at.xvx)
+    np.testing.assert_allclose(fit.beta_cov, expected, rtol=1e-7)
+    # The standard error of the difference of two coefficients needs the covariance.
+    difference = np.array([0.0, 1.0, -1.0])
+    assert np.sqrt(difference @ fit.beta_cov @ difference) == pytest.approx(
+        np.sqrt(difference @ expected @ difference), rel=1e-7
+    )
+    assert fit_lmm(y, groups, intercept=False).beta_cov.shape == (0, 0)
+
+
+def test_the_search_uses_the_gradient_and_needs_few_evaluations(
+    example_residuals: pd.DataFrame,
+) -> None:
+    """The search follows the slope of the criterion, which takes far fewer
+    evaluations than a search that only compares values of it (9 against about 50
+    here). test_matches_lme4 checks where this fit ends."""
+    y, groups = fit_inputs(example_residuals, "PGA", True)
+    fit = fit_lmm(y, groups)
+    assert fit.converged
+    assert fit.n_evals <= 15
+
+
+@pytest.mark.parametrize(
+    ("data", "setting", "value"),
+    [
+        ("PGA", "NEWTON_MAX_STEPS", 0),
+        ("no_event_effect", "NEWTON_MAX_STEPS", 0),
+        ("PGA", "NEWTON_MAX_JUMP", 0.0),
+    ],
+)
+def test_the_search_without_derivatives_finishes_what_the_gradient_search_cannot(
+    example_residuals: pd.DataFrame,
+    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
+    monkeypatch: pytest.MonkeyPatch,
+    data: str,
+    setting: str,
+    value: float,
+) -> None:
+    """If the gradient search cannot confirm that it has arrived, the search that only
+    compares values of the criterion takes over from where it stopped. Here that is
+    forced, by allowing the confirmation no steps, or no jump of any length."""
+    y, groups = fit_inputs(example_residuals, data, True)
+    usual = fit_lmm(y, groups)
+    monkeypatch.setattr(f"mera.lmm.{setting}", value)
+    fallback = fit_lmm(y, groups)
+    assert fallback.converged
+    assert fallback.n_evals > usual.n_evals
+    assert_matches_lme4(fallback, lme4_fits[data, True, True], groups)
+    # where the fit is singular, both report exactly zero
+    np.testing.assert_array_equal(fallback.theta == 0.0, usual.theta == 0.0)
+
+
+def test_confirming_a_short_jump_takes_one_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a short Newton jump the Hessian is not measured again, because it cannot
+    have changed: one evaluation of the slope at the new point confirms the optimum.
+
+    The criterion here is a smooth bowl with its minimum at ``best``, and the first
+    stage is replaced by one that stops a ten-thousandth away from it, so that the
+    evaluations of the second stage can be counted: one where the first stage stops, two
+    for the Hessian, and one after the jump.
+    """
+    best = np.array([0.6, 1.1])
+    steepness = np.array([3.0, 5.0])
+
+    class Bowl:
+        """Stands in for the engine's model: sum of steepness * (cosh(omega - best) - 1)."""
+
+        def deviance_and_gradient(self, theta: list[float]) -> tuple[float, np.ndarray]:
+            omega = np.log1p(np.square(theta))
+            value = float(np.sum(steepness * (np.cosh(omega - best) - 1.0)))
+            slope_in_omega = steepness * np.sinh(omega - best)
+            # the engine's gradient is with respect to theta squared
+            return value, slope_in_omega / np.exp(omega)
+
+    def stops_nearby(fun: Any, x0: np.ndarray, **options: Any) -> SimpleNamespace:
+        """In place of scipy's minimize: evaluates once near the optimum and stops."""
+        stretch = x0 / np.log(2.0)  # the search starts every omega at log(2)
+        x = (best + 1e-4) * stretch
+        _, slope = fun(x)
+        return SimpleNamespace(x=x, jac=slope, status=0)
+
+    monkeypatch.setattr("mera.lmm.minimize", stops_nearby)
+    start = np.full(2, np.log(2.0))
+    omega, n_evals, failure = _search(cast("Any", Bowl()), start, 10.0, [30, 12])
+    assert failure is None
+    np.testing.assert_allclose(omega, best, atol=1e-9)
+    assert n_evals == 4
+
+
+def test_the_search_does_not_jump_where_the_criterion_does_not_curve_upwards() -> None:
+    """Newton's method finds where the slope is zero, which is a minimum only if the
+    criterion curves upwards there. A criterion that is the same everywhere does not:
+    the jump is not calculated, and the search without the slope takes over."""
+
+    class Flat:
+        """Stands in for the engine's model, with a criterion that never changes."""
+
+        def __init__(self) -> None:
+            self.calls_without_slope = 0
+
+        def deviance_and_gradient(self, theta: list[float]) -> tuple[float, np.ndarray]:
+            return 1.0, np.zeros(len(theta))
+
+        def deviance(self, theta: list[float]) -> float:
+            self.calls_without_slope += 1
+            return 1.0
+
+    model = Flat()
+    start = np.full(2, np.log(2.0))
+    omega, n_evals, failure = _search(cast("Any", model), start, 10.0, [30, 12])
+    assert failure is None
+    assert model.calls_without_slope > 0
+    assert n_evals > model.calls_without_slope
+    np.testing.assert_allclose(omega, start, atol=0.2)

@@ -1,5 +1,5 @@
 name: Publish to PyPI
-run-name: Publish Python Package to PyPI for release ${{ github.event.release.tag_name }}
+run-name: Publish Python Package to PyPI for release ${{ github.event.release.tag_name || inputs.tag_name || github.ref_name }}
 
 on:
   release:
@@ -7,56 +7,31 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Git tag to checkout and publish'
+        description: "Git tag to checkout and publish"
         required: false
         type: string
 
 jobs:
+  # The sdist plus a cibuildwheel matrix (Linux, macOS, Windows) over every CPython
+  # that requires-python allows, since mera has a Rust extension. See
+  # ucgmsim/meta-ci-action's README.
   build:
-    name: Build distribution 📦
-    runs-on: ubuntu-latest
+    uses: ucgmsim/meta-ci-action/.github/workflows/build-dist.yml@v2
+    with:
+      ref: ${{ inputs.tag_name }}  # empty on a release: builds the release tag
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag_name || github.ref }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install pypa/build
-        run: >-
-          python3 -m
-          pip install
-          build
-          --user
-      - name: Build a binary wheel and a source tarball
-        run: python3 -m build
-      - name: Store the distribution packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
   publish-to-pypi:
     name: Publish to PyPI
-    needs:
-    - build
+    needs: build
     runs-on: ubuntu-latest
-
     environment:
       name: pypi
       url: https://pypi.org/p/ucgmsim-mera
-
     permissions:
       id-token: write
-
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.13.0

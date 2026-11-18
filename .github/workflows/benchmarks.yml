@@ -1,0 +1,23 @@
+name: Benchmarks
+
+# Runs the engine's criterion benchmarks (crates/mera_lmm/benches) on a pull request's
+# base and head, and posts one comment on the pull request with the timings and how
+# they changed. On main it runs the head only and writes the job summary.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  criterion:
+    name: Criterion benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # the plots are pushed to the criterion-plots branch
+      pull-requests: write  # the results are posted as a comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ucgmsim/meta-ci-action/criterion-bench@v2
+        with:
+          working-directory: crates/mera_lmm

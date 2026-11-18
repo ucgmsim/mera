@@ -384,7 +384,7 @@ mod tests {
         let mut rng = Lcg::new(seed);
         let ev: Vec<usize> = (0..n).map(|_| rng.below(events)).collect();
         let st: Vec<usize> = (0..n).map(|_| rng.below(sites)).collect();
-        let design = Design::new(&[ev, st], &vec![0.0; n], &[], 0).unwrap();
+        let design = Design::from_full_codes(&[ev, st], &vec![0.0; n], &[], 0).unwrap();
         let mut values = vec![0.0; design.ztz.len()];
         design.fill_a(&[0.8, 1.3], &mut values);
         let q = design.q();

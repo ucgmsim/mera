@@ -7,7 +7,7 @@ readers. :func:`mera.lmm.fit_lmm` is the only code in mera that uses it.
 
 Typical use::
 
-    model = CrossedModel(codes, y, x)      # once per fit
+    model = CrossedModel(codes, n_levels, y, x)   # once per fit
     model.deviance([0.8, 1.2])             # the criterion at a trial theta, many times
     estimates = model.fit_at(best_theta)   # everything else, once
 """
@@ -43,7 +43,10 @@ class CrossedModel:
     ----------
     codes : sequence of int64 arrays
         One array per grouping factor (e.g. events, sites), with the level of each
-        observation as an integer 0, 1, 2, ...
+        observation as an integer 0, 1, 2, ..., or -1 for an observation that has no
+        level in that factor.
+    n_levels : sequence of int
+        The number of levels of each grouping factor. Every code must be below it.
     y : float64 array
         The response, one value per observation.
     x : float64 array of shape (n, p)
@@ -68,6 +71,7 @@ class CrossedModel:
     def __init__(
         self,
         codes: Sequence[npt.NDArray[np.int64]],
+        n_levels: Sequence[int],
         y: npt.NDArray[np.float64],
         x: npt.NDArray[np.float64],
         *,

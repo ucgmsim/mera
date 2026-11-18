@@ -32,8 +32,10 @@ fn to_py_err(error: LmmError) -> PyErr {
 
 /// A linear mixed model with crossed random intercepts, evaluated at any theta.
 ///
-/// `codes` holds one int64 array of level codes (0, 1, ...) per grouping factor, `y` the
-/// response and `x` the n x p fixed-effects matrix (n x 0 for no fixed effects).
+/// `codes` holds one int64 array of level codes per grouping factor (0, 1, ..., or -1
+/// for an observation with no level in that factor), `n_levels` the number of levels of
+/// each factor, `y` the response and `x` the n x p fixed-effects matrix (n x 0 for no
+/// fixed effects).
 //
 // Python runs one thread at a time, under a lock (the "GIL"). The engine's calculations
 // need nothing from Python, so each method below releases the lock around them with
@@ -49,26 +51,32 @@ struct PyCrossedModel {
 #[pymethods]
 impl PyCrossedModel {
     #[new]
-    #[pyo3(signature = (codes, y, x, *, reml=true))]
+    #[pyo3(signature = (codes, n_levels, y, x, *, reml=true))]
     fn new(
         py: Python<'_>,
         codes: Vec<PyReadonlyArray1<i64>>,
+        n_levels: Vec<usize>,
         y: PyReadonlyArray1<f64>,
         x: PyReadonlyArray2<f64>,
         reml: bool,
     ) -> PyResult<Self> {
-        // Copy each array of codes into a Rust vector, checking that none is negative
-        // (the codes are used as indexes).
+        // Copy each array of codes into a Rust vector. A code of -1 becomes `None`, "no
+        // level in this factor"; any other negative number is a mistake. (The engine
+        // checks that the codes are below the number of levels.)
         let codes = codes
             .iter()
             .map(|c| {
                 c.as_array()
                     .iter()
-                    .map(|&v| {
-                        usize::try_from(v)
-                            .map_err(|_| PyValueError::new_err("level codes must be non-negative"))
+                    .map(|&v| match v {
+                        -1 => Ok(None),
+                        _ => usize::try_from(v).map(Some).map_err(|_| {
+                            PyValueError::new_err(
+                                "level codes must be 0 or more, or -1 for no level",
+                            )
+                        }),
                     })
-                    .collect::<PyResult<Vec<usize>>>()
+                    .collect::<PyResult<Vec<Option<usize>>>>()
             })
             .collect::<PyResult<Vec<_>>>()?;
         let y: Vec<f64> = y.as_array().iter().copied().collect();
@@ -78,7 +86,7 @@ impl PyCrossedModel {
         let (x, p) = (x.t().iter().copied().collect::<Vec<f64>>(), x.ncols());
         // The arrays are copied by now, so the rest needs nothing from Python.
         let inner = py
-            .detach(|| CrossedModel::new(Design::new(&codes, &y, &x, p)?, reml))
+            .detach(|| CrossedModel::new(Design::new(&codes, &n_levels, &y, &x, p)?, reml))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }

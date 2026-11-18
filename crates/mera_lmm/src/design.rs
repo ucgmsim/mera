@@ -76,6 +76,26 @@
 //!
 //! Column `c` owns the entries from `col_ptr[c]` up to, but not including,
 //! `col_ptr[c + 1]`. Column 0 owns entries 0, 1 and 2: the values 2, 1, 1 in rows 0, 3, 4.
+//!
+//! The three lists are made by a sparse-matrix library (faer). `Design::new` only lists
+//! what goes into the matrix: for each observation, a 1 for each pair of levels that it
+//! has (event 0 with site 0, ...), and for each level, its number of observations. The
+//! library sorts that list into column order and adds up the entries that fall in the
+//! same place, so a pair of levels that shares three observations, listed three times
+//! with the value 1, becomes one entry with the value 3. This is what
+//! `scipy.sparse.coo_matrix((values, (rows, columns))).tocsc()` does in Python.
+//!
+//! # An observation without a level
+//!
+//! An observation need not have a level in every factor. If the sites are split into one
+//! factor per site class (so that each class has its own standard deviation), an
+//! observation at a site of one class has no level in the factors of the other classes.
+//! Its row of `Z` is then all zeros in those factors' columns: it adds nothing to their
+//! counts and sums, and gets no term from them. In `codes`, such an entry is `None`
+//! where the others are `Some(level)`. (`Option`, with its two cases `Some(value)` and
+//! `None`, is how Rust writes "a value, or nothing".)
+
+use faer::sparse::{SparseColMat, Triplet};
 
 use crate::LmmError;
 use crate::error::invalid;
@@ -91,9 +111,9 @@ use crate::error::invalid;
 pub struct Design {
     /// Number of observations.
     pub n: usize,
-    /// Number of fixed-effect columns: 1 when mera fits a bias, otherwise 0.
+    /// Number of fixed-effect columns: the bias, if one is fitted, and the covariates.
     pub p: usize,
-    /// Number of levels of each factor (largest code + 1), e.g. `[479 events, 212 sites]`.
+    /// Number of levels of each factor, e.g. `[479 events, 212 sites]`.
     pub levels_per_factor: Vec<usize>,
     /// Factor index of every stacked level, e.g. `[0, 0, 0, 1, 1]` in the worked example.
     pub level_factor: Vec<usize>,
@@ -111,21 +131,36 @@ pub struct Design {
 }
 
 impl Design {
-    /// Builds the design from per-factor level codes, the response and an `n x p`
-    /// column-major fixed-effects matrix (empty when `p == 0`).
+    /// Builds the design from per-factor level codes, the number of levels of each
+    /// factor, the response and an `n x p` column-major fixed-effects matrix (empty when
+    /// `p == 0`).
     ///
-    /// `codes[f][r]` is the level of observation `r` in factor `f`, as an integer from 0.
-    /// In the worked example, `codes` is `[[0, 0, 1, 1, 2], [0, 1, 0, 1, 1]]`.
+    /// `codes[f][r]` is the level of observation `r` in factor `f`, as an integer from 0
+    /// inside `Some(...)`, or `None` if the observation has no level in that factor. In
+    /// the worked example, `codes` is `[[0, 0, 1, 1, 2], [0, 1, 0, 1, 1]]`, each number
+    /// in a `Some`, and `n_levels` is `[3, 2]`.
     ///
     /// The return type `Result<Self, LmmError>` means "a `Design`, or an error": the
     /// checks below return `Err(...)` for unusable input, and the last line returns
     /// `Ok(...)` with the finished design.
-    pub fn new(codes: &[Vec<usize>], y: &[f64], x: &[f64], p: usize) -> Result<Self, LmmError> {
+    pub fn new(
+        codes: &[Vec<Option<usize>>],
+        n_levels: &[usize],
+        y: &[f64],
+        x: &[f64],
+        p: usize,
+    ) -> Result<Self, LmmError> {
         // ---- Check the input ----
         let n = y.len();
         let k = codes.len();
         if k == 0 {
             return Err(invalid("at least one grouping factor is required"));
+        }
+        if n_levels.len() != k {
+            return Err(invalid(format!(
+                "{} numbers of levels were given for {k} grouping factors",
+                n_levels.len()
+            )));
         }
         if n == 0 {
             return Err(invalid("the response is empty"));
@@ -150,6 +185,20 @@ impl Design {
                 codes[f].len()
             )));
         }
+        // Every code must be one of its factor's levels: the codes are used as indexes.
+        // (`flatten` skips the `None` entries and unwraps the `Some` ones.)
+        for (f, factor_codes) in codes.iter().enumerate() {
+            if factor_codes
+                .iter()
+                .flatten()
+                .any(|&code| code >= n_levels[f])
+            {
+                return Err(invalid(format!(
+                    "grouping factor {f} has a code that is not one of its {} levels",
+                    n_levels[f]
+                )));
+            }
+        }
         if y.iter().chain(x).any(|v| !v.is_finite()) {
             return Err(invalid(
                 "the response or fixed effects contain NaN or infinite values",
@@ -157,12 +206,7 @@ impl Design {
         }
 
         // ---- Stack the levels of all factors into one index, 0..q ----
-        // The number of levels of each factor is its largest code plus one: [3, 2] in the
-        // worked example.
-        let levels_per_factor: Vec<usize> = codes
-            .iter()
-            .map(|c| c.iter().max().map_or(0, |m| m + 1))
-            .collect();
+        let levels_per_factor = n_levels.to_vec();
         // offset[f] is the stacked index of factor f's first level: [0, 3, 5] in the worked
         // example (events start at 0, sites at 3, and there are q = 5 levels in total).
         let mut offset = vec![0usize; k + 1];
@@ -176,47 +220,44 @@ impl Design {
             .flat_map(|f| std::iter::repeat_n(f, levels_per_factor[f]))
             .collect();
         // A small local function (a "closure", like a Python lambda): the stacked index of
-        // the level that observation r has in factor f.
-        let level = |f: usize, r: usize| offset[f] + codes[f][r];
+        // the level that observation r has in factor f, or None if it has none.
+        let level = |f: usize, r: usize| codes[f][r].map(|code| offset[f] + code);
 
         // ---- Z'Z ----
-        // Diagonal of Z'Z: observations per level. Below the diagonal: how often levels of
-        // two different factors share an observation, gathered as sorted (column, row) keys.
+        // The entries of the lower triangle of Z'Z, as (row, column, value). For each
+        // observation, a 1 for each pair of levels that it has: the pair shares that
+        // observation. A pair that shares several observations is listed several times.
         let mut diagonal = vec![0.0f64; q];
-        let mut keys: Vec<(usize, usize)> = Vec::with_capacity(n * k * (k - 1) / 2);
+        let mut entries = Vec::with_capacity(q + n * k * (k - 1) / 2);
         for r in 0..n {
             for f in 0..k {
-                diagonal[level(f, r)] += 1.0;
+                if let Some(c) = level(f, r) {
+                    diagonal[c] += 1.0;
+                }
             }
             for a in 0..k {
                 for b in a + 1..k {
-                    // Later factors have larger stacked indices, so this is below the diagonal.
-                    keys.push((level(a, r), level(b, r)));
+                    // Later factors have larger stacked indices, so this is below the
+                    // diagonal: the earlier factor's level is the column.
+                    if let (Some(column), Some(row)) = (level(a, r), level(b, r)) {
+                        entries.push(Triplet::new(row, column, 1.0));
+                    }
                 }
             }
         }
-        // Sorting puts the keys in the order CSC needs: by column, then by row within a
-        // column. In the worked example the keys end up as
-        // (0,3) (0,4) (1,3) (1,4) (2,4): event 0 with site 0, event 0 with site 1, ...
-        keys.sort_unstable();
-        let mut col_ptr = vec![0usize; q + 1];
-        let mut row_idx = Vec::with_capacity(q + keys.len());
-        let mut ztz = Vec::with_capacity(q + keys.len());
-        // Equal keys are adjacent once sorted: each run is one entry and its length the count.
-        // (A pair of levels appears once per shared observation, so a site that recorded
-        // the same event twice gives a run of length 2.)
-        let mut runs = keys.chunk_by(|a, b| a == b).peekable();
-        for c in 0..q {
-            // Each column starts with its diagonal entry ...
-            row_idx.push(c);
-            ztz.push(diagonal[c]);
-            // ... followed by every run whose column is c.
-            while let Some(run) = runs.next_if(|run| run[0].0 == c) {
-                row_idx.push(run[0].1);
-                ztz.push(run.len() as f64);
-            }
-            col_ptr[c + 1] = row_idx.len();
+        // The diagonal: the number of observations of each level. Every level gets its
+        // entry, even with no observations, because A has a 1 added there (`fill_a`).
+        for (c, &count) in diagonal.iter().enumerate() {
+            entries.push(Triplet::new(c, c, count));
         }
+        // The library sorts the entries by column, then by row within a column, and adds
+        // up those in the same place. The diagonal is the first row of each column of a
+        // lower triangle, so each column starts with its diagonal entry.
+        let ztz = SparseColMat::<usize, f64>::try_new_from_triplets(q, q, &entries)
+            .map_err(|error| invalid(format!("could not assemble Z'Z: {error:?}")))?;
+        let col_ptr = ztz.symbolic().col_ptr().to_vec();
+        let row_idx = ztz.symbolic().row_idx().to_vec();
+        let ztz = ztz.val().to_vec();
 
         // ---- Z'[y X] and [y X]'[y X] ----
         // nc is the number of columns of [y X]. yx(r, c) reads entry (r, c) of [y X]
@@ -230,7 +271,9 @@ impl Design {
                 let value = yx(r, c);
                 // Z'[y X]: add this value to the sum of each level the observation has.
                 for f in 0..k {
-                    zt_yx[level(f, r) + q * c] += value;
+                    if let Some(stacked) = level(f, r) {
+                        zt_yx[stacked + q * c] += value;
+                    }
                 }
                 // [y X]'[y X]: sums of products of two columns over all observations.
                 for c2 in 0..nc {
@@ -249,6 +292,26 @@ impl Design {
             zt_yx,
             yx_yx,
         })
+    }
+
+    /// For the tests: a design in which every observation has a level in every factor,
+    /// and a factor has as many levels as its largest code plus one.
+    #[cfg(test)]
+    pub(crate) fn from_full_codes(
+        codes: &[Vec<usize>],
+        y: &[f64],
+        x: &[f64],
+        p: usize,
+    ) -> Result<Self, LmmError> {
+        let n_levels: Vec<usize> = codes
+            .iter()
+            .map(|c| c.iter().max().map_or(0, |m| m + 1))
+            .collect();
+        let codes: Vec<Vec<Option<usize>>> = codes
+            .iter()
+            .map(|c| c.iter().copied().map(Some).collect())
+            .collect();
+        Self::new(&codes, &n_levels, y, x, p)
     }
 
     /// Total number of levels over all factors (events + sites).
@@ -308,7 +371,7 @@ mod tests {
     fn small() -> Design {
         let events = vec![0, 0, 1, 1, 2];
         let sites = vec![0, 1, 0, 1, 1];
-        Design::new(&[events, sites], &[1.0, 2.0, 3.0, 4.0, 5.0], &[], 0).unwrap()
+        Design::from_full_codes(&[events, sites], &[1.0, 2.0, 3.0, 4.0, 5.0], &[], 0).unwrap()
     }
 
     #[test]
@@ -352,7 +415,8 @@ mod tests {
 
     #[test]
     fn repeated_event_site_pairs_are_counted() {
-        let d = Design::new(&[vec![0, 0, 0], vec![0, 0, 1]], &[1.0, 1.0, 1.0], &[], 0).unwrap();
+        let d = Design::from_full_codes(&[vec![0, 0, 0], vec![0, 0, 1]], &[1.0, 1.0, 1.0], &[], 0)
+            .unwrap();
         // event 0 (level 0) meets site 0 (level 1) twice and site 1 (level 2) once
         assert_eq!(d.col_ptr, vec![0, 3, 4, 5]);
         assert_eq!(d.row_idx, vec![0, 1, 2, 1, 2]);
@@ -362,22 +426,71 @@ mod tests {
     #[test]
     fn fixed_effect_columns_enter_the_cross_products() {
         let y = [1.0, 2.0, 4.0];
-        let d = Design::new(&[vec![0, 1, 1]], &y, &[1.0, 1.0, 1.0], 1).unwrap();
+        let d = Design::from_full_codes(&[vec![0, 1, 1]], &y, &[1.0, 1.0, 1.0], 1).unwrap();
         // Z'[y 1]: level 0 -> (1, 1), level 1 -> (6, 2); column-major
         assert_eq!(d.zt_yx, vec![1.0, 6.0, 1.0, 2.0]);
         // [y 1]'[y 1] = [[21, 7], [7, 3]]
         assert_eq!(d.yx_yx, vec![21.0, 7.0, 7.0, 3.0]);
     }
 
+    // The worked example again, but observation 4 has no site: its site code is None.
+    fn small_with_a_missing_site() -> Design {
+        let events = [0, 0, 1, 1, 2].map(Some).to_vec();
+        let sites = vec![Some(0), Some(1), Some(0), Some(1), None];
+        Design::new(
+            &[events, sites],
+            &[3, 2],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[],
+            0,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_observation_without_a_level_adds_nothing_to_that_factor() {
+        let d = small_with_a_missing_site();
+        // Site 1 now has 2 observations (1 and 3), and event 2 shares none with any site.
+        assert_eq!(d.col_ptr, vec![0, 3, 6, 7, 8, 9]);
+        assert_eq!(d.row_idx, vec![0, 3, 4, 1, 3, 4, 2, 3, 4]);
+        assert_eq!(d.ztz, vec![2.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0, 2.0, 2.0]);
+        // events: 1+2, 3+4, 5; sites: 1+3, 2+4. Observation 4 still counts in y'y.
+        assert_eq!(d.zt_yx, vec![3.0, 7.0, 5.0, 4.0, 6.0]);
+        assert_eq!(d.yx_yx, vec![55.0]);
+        assert_eq!((d.q(), d.n), (5, 5));
+    }
+
+    #[test]
+    fn a_level_without_observations_keeps_its_place() {
+        // Three levels are declared, and level 1 has no observations.
+        let codes = [0, 0, 2].map(Some).to_vec();
+        let d = Design::new(&[codes], &[3], &[1.0, 2.0, 4.0], &[], 0).unwrap();
+        assert_eq!(d.col_ptr, vec![0, 1, 2, 3]);
+        assert_eq!(d.row_idx, vec![0, 1, 2]);
+        assert_eq!(d.ztz, vec![2.0, 0.0, 1.0]);
+        assert_eq!(d.zt_yx, vec![3.0, 0.0, 4.0]);
+    }
+
+    #[test]
+    fn rejects_codes_that_are_not_levels() {
+        let y = [1.0, 2.0, 3.0];
+        let codes = [0, 1, 2].map(Some).to_vec();
+        // code 2 is not one of 2 levels
+        assert!(Design::new(std::slice::from_ref(&codes), &[2], &y, &[], 0).is_err());
+        // one level count per factor is needed
+        assert!(Design::new(std::slice::from_ref(&codes), &[3, 3], &y, &[], 0).is_err());
+        assert!(Design::new(std::slice::from_ref(&codes), &[3], &y, &[], 0).is_ok());
+    }
+
     #[test]
     fn rejects_invalid_input() {
         let ok = vec![0, 1, 1];
         let one_factor = std::slice::from_ref(&ok);
-        assert!(Design::new(&[], &[1.0, 2.0, 3.0], &[], 0).is_err());
-        assert!(Design::new(one_factor, &[], &[], 0).is_err());
-        assert!(Design::new(&[vec![0, 1]], &[1.0, 2.0, 3.0], &[], 0).is_err());
-        assert!(Design::new(one_factor, &[1.0, f64::NAN, 3.0], &[], 0).is_err());
-        assert!(Design::new(one_factor, &[1.0, 2.0, 3.0], &[1.0, 1.0], 1).is_err());
-        assert!(Design::new(one_factor, &[1.0, 2.0, 3.0], &[1.0; 9], 3).is_err());
+        assert!(Design::from_full_codes(&[], &[1.0, 2.0, 3.0], &[], 0).is_err());
+        assert!(Design::from_full_codes(one_factor, &[], &[], 0).is_err());
+        assert!(Design::from_full_codes(&[vec![0, 1]], &[1.0, 2.0, 3.0], &[], 0).is_err());
+        assert!(Design::from_full_codes(one_factor, &[1.0, f64::NAN, 3.0], &[], 0).is_err());
+        assert!(Design::from_full_codes(one_factor, &[1.0, 2.0, 3.0], &[1.0, 1.0], 1).is_err());
+        assert!(Design::from_full_codes(one_factor, &[1.0, 2.0, 3.0], &[1.0; 9], 3).is_err());
     }
 }

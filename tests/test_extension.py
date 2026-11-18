@@ -9,15 +9,12 @@ from mera import _lmm
 def test_invalid_input_raises_value_error():
     codes = [np.array([0, 1, 1], dtype=np.int64)]
     no_x = np.empty((3, 0))  # no fixed effects
+    y = np.array([1.0, 2.0, 4.0])
     with pytest.raises(ValueError):
-        _lmm.CrossedModel(codes, np.array([1.0, np.nan, 3.0]), no_x)
+        _lmm.CrossedModel(codes, [2], np.array([1.0, np.nan, 3.0]), no_x)
     with pytest.raises(ValueError):
-        _lmm.CrossedModel(
-            [np.array([0, -1, 1], dtype=np.int64)], np.array([1.0, 2.0, 3.0]), no_x
-        )
-    with pytest.raises(ValueError):
-        _lmm.CrossedModel(codes, np.array([1.0, 2.0, 3.0]), np.ones((2, 1)))
-    model = _lmm.CrossedModel(codes, np.array([1.0, 2.0, 4.0]), no_x)
+        _lmm.CrossedModel(codes, [2], y, np.ones((2, 1)))
+    model = _lmm.CrossedModel(codes, [2], y, no_x)
     with pytest.raises(ValueError):
         model.deviance([-1.0])
     with pytest.raises(ValueError):
@@ -26,12 +23,33 @@ def test_invalid_input_raises_value_error():
         model.deviance([1.0, 1.0])
 
 
+def test_codes_must_be_levels_or_minus_one():
+    """A code is the number of a level, from 0 to one less than the number of levels of
+    its factor, or -1 for an observation that has no level in that factor."""
+    no_x = np.empty((3, 0))
+    y = np.array([1.0, 2.0, 4.0])
+
+    def model(codes: list[int], n_levels: int) -> _lmm.CrossedModel:
+        return _lmm.CrossedModel([np.array(codes, dtype=np.int64)], [n_levels], y, no_x)
+
+    assert np.isfinite(model([0, 1, -1], 2).deviance([1.0]))
+    with pytest.raises(ValueError, match="-1"):
+        model([0, 1, -2], 2)
+    with pytest.raises(ValueError, match="not one of its 2 levels"):
+        model([0, 1, 2], 2)
+    # A far larger code must be an error too, not an attempt to allocate that many levels.
+    with pytest.raises(ValueError, match="not one of its 2 levels"):
+        model([0, 1, 10**12], 2)
+    with pytest.raises(ValueError):
+        _lmm.CrossedModel([np.array([0, 1, 1], dtype=np.int64)], [2, 2], y, no_x)
+
+
 def test_collinear_fixed_effects_raise_runtime_error():
     codes = [np.array([0, 0, 1, 1], dtype=np.int64)]
     # an all-zero covariate makes X'V^-1X singular
     x = np.column_stack([np.ones(4), np.zeros(4)])
     with pytest.raises(RuntimeError, match="collinear"):
-        _lmm.CrossedModel(codes, np.arange(4.0), x).deviance([1.0])
+        _lmm.CrossedModel(codes, [2], np.arange(4.0), x).deviance([1.0])
 
 
 def test_other_threads_run_during_a_calculation() -> None:
@@ -47,7 +65,9 @@ def test_other_threads_run_during_a_calculation() -> None:
     events = np.repeat(np.arange(n_events, dtype=np.int64), records_per_event)
     sites = rng.integers(0, n_sites, events.size, dtype=np.int64)
     y = rng.normal(size=events.size)
-    model = _lmm.CrossedModel([events, sites], y, np.empty((y.size, 0)))
+    model = _lmm.CrossedModel(
+        [events, sites], [n_events, n_sites], y, np.empty((y.size, 0))
+    )
     start_together = threading.Barrier(2)
     refused = []
 

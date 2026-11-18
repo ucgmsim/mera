@@ -349,7 +349,8 @@ def fit_lmm(
                 )
         # Creating the model reduces the data to sums per level, once. After that,
         # model.deviance(theta) is the criterion at any theta.
-        model = _lmm.CrossedModel(codes, y - x @ start_beta, x, reml=reml)
+        n_levels = [level.size for level in levels]
+        model = _lmm.CrossedModel(codes, n_levels, y - x @ start_beta, x, reml=reml)
         n_factors = len(codes)
 
         # ---- 3. Search for the theta with the smallest criterion ----

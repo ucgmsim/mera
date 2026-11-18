@@ -321,7 +321,7 @@ mod tests {
         let events = (0..n).map(|_| rng.below(40)).collect();
         let sites = (0..n).map(|_| rng.below(25)).collect();
         let y: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
-        let design = Design::new(&[events, sites], &y, &vec![1.0; n], 1).unwrap();
+        let design = Design::from_full_codes(&[events, sites], &y, &vec![1.0; n], 1).unwrap();
         let mut models = [FactorKind::Simplicial, FactorKind::Supernodal]
             .map(|kind| CrossedModel::with_factor_kind(design.clone(), true, kind).unwrap());
         assert!(models[0].factor.is_simplicial() && !models[1].factor.is_simplicial());

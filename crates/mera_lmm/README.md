@@ -91,6 +91,9 @@ the bridge to Python:
 | `Option<T>`: `Some(x)` or `None` | a value that may be missing, like `x` or `None` |
 | `if let Some(x) = maybe { ... }` | `if maybe is not None:`, with its value called `x` inside the braces |
 | `maybe.map_or(0, \|m\| m + 1)` | `0 if maybe is None else maybe + 1` |
+| `maybe?` | in a function that returns an `Option`: if `maybe` is `None`, return `None` now; otherwise carry on with its value |
+| `v[a..b].fill(x)` | `v[a:b] = x` on a numpy array: set every element of the slice to `x` |
+| `v.clear(); v.resize(n, 0.0);` | empty the list and refill it with `n` zeros, reusing its memory |
 | `v.push(x)`, `v.extend(other)` | `v.append(x)`, `v.extend(other)` |
 
 Matrices are stored as flat lists in *column-major* order: all of column 0, then all of
@@ -149,7 +152,9 @@ either `Ok(value)` or `Err(error)`.
 | `v.iter().any(\|x\| !x.is_finite())` | `any(not math.isfinite(x) for x in v)` |
 | `(0..n).rev()` | `reversed(range(n))` |
 | `v.iter().map(\|x\| x.ln()).sum()` | `sum(math.log(x) for x in v)` |
-| `while let Some(run) = runs.next_if(...) { ... }` | keep taking items from an iterator while a condition holds |
+| `(0..p).flat_map(\|a\| (0..p).map(move \|b\| (a, b)))` | `[(a, b) for a in range(p) for b in range(p)]` |
+| `while b < m { ... }` | `while b < m:` |
+| `rows.binary_search(&row)` | find `row` in a sorted list by bisection, like Python's `bisect` |
 
 `&` in front of a loop variable, and `*value += 1.0`, are bookkeeping about views: `*value`
 means "the number that this view points at". They can be read as if they were not there.
@@ -169,9 +174,11 @@ means "the number that this view points at". They can be read as if they were no
 | `use crate::LmmError;` | `from <this crate> import LmmError` |
 | `Col::<f64>::from_fn(...)`, `.sum::<f64>()` | the part in `::<...>` names a type that the compiler could not work out |
 
-Names from the `faer` library, such as `Mat`, `Col`, `MatRef`, `Llt` and `Par::Seq`, are
-dense matrices, column vectors, read-only views of matrices, Cholesky factorisations and
-"run on one thread".
+Names from the `faer` library, such as `Mat`, `Col`, `MatRef`, `MatMut`, `Llt` and
+`Par::Seq`, are dense matrices, column vectors, read-only views of matrices, views that
+can be written to, Cholesky factorisations and "run on one thread". Its matrix products
+(`matmul`) are explained where they are used, in `supernodal_selected_inverse` in
+`src/factor.rs`.
 
 ## Building and testing
 

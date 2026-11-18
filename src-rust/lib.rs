@@ -42,7 +42,7 @@ fn to_py_err(error: LmmError) -> PyErr {
 // `py.detach`: other Python threads can run meanwhile, and models that are fitted in
 // separate threads use separate processor cores. `py` is a handle to the Python
 // interpreter, which PyO3 supplies: from Python the calls are just `CrossedModel(...)`,
-// `model.deviance(theta)` and `model.fit_at(theta)`.
+// `model.deviance(theta)`, `model.deviance_and_gradient(theta)` and `model.fit_at(theta)`.
 #[pyclass(module = "mera._lmm", name = "CrossedModel")]
 struct PyCrossedModel {
     inner: CrossedModel,
@@ -98,6 +98,10 @@ impl PyCrossedModel {
     }
 
     /// The criterion at `theta` and its derivative with respect to each theta squared.
+    ///
+    /// Python receives a tuple: the criterion as a float, and the gradient as a numpy
+    /// array with one value per grouping factor. (`Bound<'py, numpy::PyArray1<f64>>` is
+    /// PyO3's name for "a one-dimensional numpy array of floats, owned by Python".)
     fn deviance_and_gradient<'py>(
         &mut self,
         py: Python<'py>,
@@ -107,6 +111,7 @@ impl PyCrossedModel {
         let (deviance, gradient) = py
             .detach(|| model.deviance_and_gradient(&theta))
             .map_err(to_py_err)?;
+        // `into_pyarray` hands the list of numbers over to numpy without copying it.
         Ok((deviance, gradient.into_pyarray(py)))
     }
 

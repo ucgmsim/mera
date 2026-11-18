@@ -776,6 +776,7 @@ def _search(
         )
         free = np.flatnonzero(~held)
         if free.size == 0:
+            # every omega is held on a bound, so there is nowhere better to go
             return omega, n_evals, None
         # The Hessian: how fast each slope changes with each of the free omegas, from
         # the change of the gradient when one omega is shifted a little.
@@ -796,15 +797,19 @@ def _search(
         # The jump that would bring every free slope to zero.
         jump = -np.linalg.solve(hessian, gradient[free])
         landing = omega[free] + jump
+        # A long jump, or one that would leave the bounds, is not trusted: the Hessian
+        # only describes the criterion close to where it was measured.
         too_far = np.abs(jump).max() > NEWTON_MAX_JUMP
         if too_far or np.any(landing < 0.0) or np.any(landing > omega_max):
             break
         omega = omega.copy()
         omega[free] = landing
+        # A jump this short means that the search had already arrived.
         if np.abs(jump).max() <= NEWTON_DONE:
             return omega, n_evals, None
 
     # ---- Stage 3: without the slope, from where the search stands ----
+    # (maxfev: what is left of the allowance of evaluations)
     result = minimize(
         value,
         omega,

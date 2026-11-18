@@ -72,6 +72,13 @@
 //! `r2` equals the sum of the squares of the residuals `e` plus the sum of the squares of
 //! `u`, which is why lme4 calls it the *penalised* residual sum of squares.
 //!
+//! # The slope of the criterion
+//!
+//! The search for the best theta is much shorter if it is also told how fast the
+//! criterion changes as each theta changes: its slope, or *gradient*. That has a formula
+//! too, built from the same pieces and from entries of `A^-1`. It is given, term by term,
+//! at [`CrossedModel::deviance_and_gradient`].
+//!
 //! # Names in the code
 //!
 //! ```text
@@ -136,7 +143,8 @@ pub struct Fit {
     pub condsd: Vec<f64>,
 }
 
-/// The profiled pieces shared by [`CrossedModel::deviance`] and [`CrossedModel::fit_at`].
+/// The profiled pieces shared by [`CrossedModel::deviance`],
+/// [`CrossedModel::deviance_and_gradient`] and [`CrossedModel::fit_at`].
 struct Profile {
     deviance: f64,
     beta: Col<f64>,
@@ -230,10 +238,15 @@ impl CrossedModel {
     /// still reported exactly by the caller.
     pub fn deviance_and_gradient(&mut self, theta: &[f64]) -> Result<(f64, Vec<f64>), LmmError> {
         self.check_theta(theta)?;
+        // Any theta below THETA_FLOOR is replaced by it, as explained above. (The new
+        // list takes the name `theta` from here on.)
         let theta: Vec<f64> = theta.iter().map(|t| t.max(THETA_FLOOR)).collect();
+        // The criterion itself, and the pieces that it shares with the gradient: W,
+        // beta, r2 and X'V^-1X ("How it is computed", at the top of this file).
         let profile = self.profile(&theta)?;
-        let d = &self.design;
+        let d = &self.design; // a shorter name
         let (q, p) = (d.q(), d.p);
+        // n - p for REML, n for ML
         let dof = self.degrees_of_freedom();
         // bracket[k]: the sum of the square brackets over the levels of factor k
         let mut bracket = vec![0.0; d.n_factors()];
@@ -246,7 +259,10 @@ impl CrossedModel {
         let s = self.factor.inverse_on_pattern();
         for c in 0..q {
             let factor_c = d.level_factor[c];
-            // Walk down column c: its entries of S, their rows, and Z'Z there.
+            // Walk down column c: its entries of S, their rows, and Z'Z there. `zip`
+            // pairs two lists, so three of them give a pair inside a pair, which the
+            // `for` line below takes apart again. (A range is used up by slicing with
+            // it, so `.clone()` copies it for the first two slices.)
             let entries = d.col_ptr[c]..d.col_ptr[c + 1];
             let column = s[entries.clone()]
                 .iter()
@@ -268,16 +284,20 @@ impl CrossedModel {
         for i in 0..q {
             // u_i: column 0 of W is A^-1 Lambda' Z'y, and the others A^-1 Lambda' Z'X
             let u = w[(i, 0)] - (0..p).map(|a| w[(i, 1 + a)] * profile.beta[a]).sum::<f64>();
-            let c = if self.reml {
-                (0..p)
-                    .flat_map(|a| (0..p).map(move |b| (a, b)))
-                    .map(|(a, b)| w[(i, 1 + a)] * xvx_inverse[(a, b)] * w[(i, 1 + b)])
-                    .sum::<f64>()
-            } else {
-                0.0
-            };
+            // c_i = w_i' (X'V^-1X)^-1 w_i, where w_i holds the entries of row i of W that
+            // belong to X: a sum over every pair (a, b) of fixed effects. It stays zero
+            // for ML, whose criterion has no log|X'V^-1X| term.
+            let mut c = 0.0;
+            if self.reml {
+                for a in 0..p {
+                    for b in 0..p {
+                        c += w[(i, 1 + a)] * xvx_inverse[(a, b)] * w[(i, 1 + b)];
+                    }
+                }
+            }
             bracket[d.level_factor[i]] -= c + dof * u * u / profile.r2;
         }
+        // Divide the sum of each factor by its theta squared, as in the formula.
         let gradient = bracket
             .iter()
             .zip(&theta)
@@ -431,8 +451,8 @@ mod tests {
 
     #[test]
     fn supernodal_layout_gives_the_same_fits() {
-        // faer picks the supernodal layout only for designs larger than this one; the fits,
-        // conditional SDs included, must not depend on the layout.
+        // Fits use the supernodal layout, and faer falls back on the simplicial one when
+        // L is diagonal. The fits, conditional SDs included, must not depend on which.
         let mut rng = Lcg::new(7);
         let n = 300;
         let events = (0..n).map(|_| rng.below(40)).collect();

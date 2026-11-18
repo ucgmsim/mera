@@ -72,6 +72,7 @@ use faer::linalg::matmul::triangular::{BlockStructure, matmul as triangular_matm
 use faer::linalg::solvers::Llt;
 use faer::linalg::triangular_inverse::invert_lower_triangular;
 use faer::sparse::linalg::SupernodalThreshold;
+use faer::sparse::linalg::cholesky::simplicial::SymbolicSimplicialCholesky;
 use faer::sparse::linalg::cholesky::supernodal::{SupernodalLltRef, SymbolicSupernodalCholesky};
 use faer::sparse::linalg::cholesky::{
     CholeskySymbolicParams, LltRef, SymbolicCholesky, SymbolicCholeskyRaw, SymmetricOrdering,
@@ -102,12 +103,12 @@ pub struct Factor {
     l_values: Vec<f64>,
     /// Scratch memory that faer uses while factorising and solving, allocated once.
     workspace: MemBuffer,
-    /// Where the non-zeros of a supernodal `L` are when its columns are listed one by
-    /// one: `(col_ptr, row_idx)`, as in `design.rs`. The selected inverse is handed out
-    /// in that layout. A simplicial `L` is stored that way already, and this is `None`.
-    columns: Option<(Vec<usize>, Vec<usize>)>,
-    /// For each stored entry of the matrix given to [`Factor::new`], where the same entry
-    /// of the selected inverse is kept (see [`Factor::inverse_on_pattern`]).
+    /// Where to read the diagonal of the inverse from the result of selected inversion
+    /// (see [`Factor::inverse_diagonal`]): one position per level, in the order of the
+    /// matrix given to [`Factor::new`].
+    diagonal_slots: Vec<usize>,
+    /// The same for each stored entry of the matrix given to [`Factor::new`], in the
+    /// order in which they were given (see [`Factor::inverse_on_pattern`]).
     a_slots: Vec<usize>,
 }
 
@@ -149,45 +150,46 @@ impl Factor {
         ));
         let l_values = vec![0.0; symbolic.len_val()];
 
-        // ---- What selected inversion needs to know about the pattern, found once ----
-        let columns = match symbolic.raw() {
-            SymbolicCholeskyRaw::Simplicial(_) => None,
-            SymbolicCholeskyRaw::Supernodal(s) => {
-                let (l_col_ptr, l_row_idx, _) = supernodal_columns(s, &l_values);
-                Some((l_col_ptr, l_row_idx))
-            }
-        };
-        let (l_col_ptr, l_row_idx) = match (symbolic.raw(), &columns) {
-            (SymbolicCholeskyRaw::Simplicial(s), _) => (s.col_ptr(), s.row_idx()),
-            (_, Some((l_col_ptr, l_row_idx))) => (&l_col_ptr[..], &l_row_idx[..]),
-            // a supernodal factor always has its columns, from the lines above
-            (SymbolicCholeskyRaw::Supernodal(_), None) => (&[][..], &[][..]),
-        };
-        // inverse[i] is the number that level i of the original matrix has in the
-        // renumbered one, P A P'.
-        let inverse = symbolic.perm().map(|perm| perm.arrays().1);
-        let renumbered = |i: usize| inverse.map_or(i, |inv| inv[i]);
+        // ---- Where the wanted entries of the selected inverse will be, found once ----
+        // Selected inversion (see `Factor::inverse_diagonal`) returns a list of numbers
+        // laid out exactly as the values of L are. Two kinds of entry are read from it:
+        // the diagonal, and the entries where A has entries. Their positions in the list
+        // depend only on the pattern, so they are worked out here rather than at every
+        // evaluation.
+        //
+        // The factorisation renumbers the levels. `renumbered(i)` is the number that
+        // level `i` of the matrix given here has in the renumbered matrix, P A P'.
+        // (`symbolic.perm()` is the renumbering, if there is one, and `.arrays().1` is
+        // the list that maps old numbers to new ones.)
+        let old_to_new = symbolic.perm().map(|perm| perm.arrays().1);
+        let renumbered = |i: usize| old_to_new.map_or(i, |new| new[i]);
+        // The error if L has no entry where one is expected. It cannot happen: L always
+        // has its diagonal, and is non-zero wherever A is.
+        let missing = || LmmError::Factorisation("an entry of A is missing from L".into());
+        // (`.ok_or_else(missing)?` below reads: if no position was found, stop and
+        // return that error.)
+        let mut diagonal_slots = Vec::with_capacity(n);
+        for i in 0..n {
+            let j = renumbered(i);
+            diagonal_slots.push(slot_in_l(symbolic.raw(), j, j).ok_or_else(missing)?);
+        }
         let mut a_slots = Vec::with_capacity(row_idx.len());
         for c in 0..n {
             for &r in &row_idx[col_ptr[c]..col_ptr[c + 1]] {
-                // Entry (r, c) of A is entry (row, column) of the renumbered matrix,
-                // taken from its lower triangle: the column is the smaller number.
+                // Entry (r, c) of A is entry (i, j) of the renumbered matrix. Only its
+                // lower triangle is stored, where the row is the larger of the two
+                // numbers and the column the smaller. The matrix is symmetric, so the
+                // entry (j, i) holds the same value.
                 let (i, j) = (renumbered(r), renumbered(c));
-                let (column, row) = (i.min(j), i.max(j));
-                // The rows of a column of L are sorted, so the row is found by
-                // bisection. It is there, because L is non-zero wherever A is.
-                let rows = &l_row_idx[l_col_ptr[column]..l_col_ptr[column + 1]];
-                let slot = rows.binary_search(&row).map_err(|_| {
-                    LmmError::Factorisation("an entry of A is missing from L".into())
-                })?;
-                a_slots.push(l_col_ptr[column] + slot);
+                let slot = slot_in_l(symbolic.raw(), i.max(j), i.min(j)).ok_or_else(missing)?;
+                a_slots.push(slot);
             }
         }
         Ok(Self {
             symbolic,
             l_values,
             workspace,
-            columns,
+            diagonal_slots,
             a_slots,
         })
     }
@@ -293,41 +295,17 @@ impl Factor {
     /// `L` has non-zeros. The diagonal is among them, and the work is comparable to the
     /// factorisation itself.
     ///
-    /// Write `Z = (P A P')^-1`. (This `Z` is not the `Z` of the model: the name is the
-    /// convention for this algorithm.) Since `P A P' = L L'`, we have `Z L = (L')^-1`,
-    /// which is upper triangular with `1 / L[j, j]` on its diagonal. Reading that equation
-    /// one entry at a time gives Takahashi's recurrences (Takahashi, Fagan & Chin 1973;
-    /// Erisman & Tinney 1975). For column `j` with below-diagonal rows `R_j`:
-    ///
-    /// ```text
-    /// Z[i, j] = -(1 / L[j, j]) * sum over k in R_j of Z[i, k] L[k, j]      for i in R_j
-    /// Z[j, j] = (1 / L[j, j] - sum over k in R_j of Z[k, j] L[k, j]) / L[j, j]
-    /// ```
-    ///
-    /// Each column only needs entries of `Z` from later columns, so the columns are
-    /// computed from the last to the first, and `A^-1` is never formed. For a supernodal
-    /// `L`, the recurrences are applied to all the columns of a supernode at once
-    /// (`supernodal_selected_inverse`, below).
-    ///
-    /// Selected inversion is the most intricate part of the crate, and it can be read as
-    /// a black box that returns entries of the inverse: the tests
-    /// `inverse_diagonal_matches_dense_inverse` and
-    /// `inverse_on_pattern_matches_dense_inverse` at the bottom of this file check them
-    /// against an ordinary dense inverse.
+    /// Selected inversion is the most intricate part of the crate: the functions
+    /// `simplicial_selected_inverse` and `supernodal_selected_inverse` below, one for
+    /// each layout of `L`. It can be read as a black box that returns entries of the
+    /// inverse. The tests `inverse_diagonal_matches_dense_inverse` and
+    /// `inverse_on_pattern_matches_dense_inverse` at the bottom of this file check those
+    /// entries against an ordinary dense inverse.
     pub fn inverse_diagonal(&self) -> Vec<f64> {
-        self.with_selected_inverse(|col_ptr, _, z| {
-            // Undo the fill-reducing permutation, if there is one. Level `i` of the
-            // renumbered matrix is level `forward[i]` of the original, so the diagonal
-            // entry of column `i` of Z (the first entry of the column, z[col_ptr[i]])
-            // belongs at `forward[i]`.
-            let n = self.dim();
-            let forward = self.symbolic.perm().map(|perm| perm.arrays().0);
-            let mut diagonal = vec![0.0; n];
-            for (i, &start) in col_ptr[..n].iter().enumerate() {
-                diagonal[forward.map_or(i, |f| f[i])] = z[start];
-            }
-            diagonal
-        })
+        let z = self.selected_inverse();
+        // Pick out the diagonal entries. `diagonal_slots` says where each one is, and
+        // already allows for the renumbering of the levels.
+        self.diagonal_slots.iter().map(|&slot| z[slot]).collect()
     }
 
     /// The entries of `A^-1` where `A` itself has entries: one value for each stored entry
@@ -337,87 +315,153 @@ impl Factor {
     /// [`Factor::inverse_diagonal`]), because `L` has a non-zero wherever `A` does. The
     /// gradient of the criterion needs them (`CrossedModel::deviance_and_gradient`).
     pub fn inverse_on_pattern(&self) -> Vec<f64> {
-        self.with_selected_inverse(|_, _, z| self.a_slots.iter().map(|&slot| z[slot]).collect())
+        let z = self.selected_inverse();
+        self.a_slots.iter().map(|&slot| z[slot]).collect()
     }
 
-    /// Computes the selected inverse `Z` (see [`Factor::inverse_diagonal`]) and hands it
-    /// to `read` together with the layout of `L`: `read(col_ptr, row_idx, z)`, where
-    /// `z[t]` is the entry of `Z` in the row `row_idx[t]` of its column, and column `j`
-    /// owns the entries from `col_ptr[j]` up to `col_ptr[j + 1]`, its diagonal first.
-    /// The rows and columns are numbered as in the renumbered matrix `P A P'`.
-    fn with_selected_inverse<T>(&self, read: impl FnOnce(&[usize], &[usize], &[f64]) -> T) -> T {
-        // A supernodal factor is inverted a supernode at a time, with dense matrix
-        // products. `z` comes back in the column layout that `Factor::new` worked out.
-        let (col_ptr, row_idx, l): (&[usize], &[usize], &[f64]) =
-            match (self.symbolic.raw(), &self.columns) {
-                (SymbolicCholeskyRaw::Supernodal(s), Some((col_ptr, row_idx))) => {
-                    let z = supernodal_selected_inverse(s, &self.l_values);
-                    return read(col_ptr, row_idx, &z);
-                }
-                // not reached: a supernodal factor always has its columns
-                (SymbolicCholeskyRaw::Supernodal(_), None) => return read(&[0], &[], &[]),
-                // A simplicial factor is stored column by column, which is how the
-                // recurrences below read it.
-                (SymbolicCholeskyRaw::Simplicial(s), _) => {
-                    (s.col_ptr(), s.row_idx(), &self.l_values)
-                }
-            };
-        let n = self.dim();
-        // z holds Z on the pattern of L: z[t] is the entry of Z where l[t] is the entry of L.
-        let mut z = vec![0.0; l.len()];
-        let mut acc: Vec<f64> = Vec::new();
-        // position[row] = slot of `row` in the current column's pattern, usize::MAX if absent
-        let mut position = vec![usize::MAX; n];
-        for j in (0..n).rev() {
-            let (start, end) = (col_ptr[j], col_ptr[j + 1]);
-            let l_jj = l[start]; // rows are sorted, so the diagonal comes first
-            let rows = &row_idx[start + 1..end];
-            let l_col = &l[start + 1..end];
-            acc.clear();
-            acc.resize(rows.len(), 0.0);
-            for (slot, &row) in rows.iter().enumerate() {
-                position[row] = slot;
-            }
-            // acc[a] = sum_b Z[rows[a], rows[b]] L[rows[b], j]. Every Z[rows[a], k] with
-            // k = rows[b] lives in column k of Z (its diagonal, or a row below it).
-            for (b, &k) in rows.iter().enumerate() {
-                let (k_start, k_end) = (col_ptr[k], col_ptr[k + 1]);
-                // the diagonal entry Z[k, k]
-                acc[b] += z[k_start] * l_col[b];
-                // the entries below it: column k is walked, and the rows in R_j picked out
-                for t in k_start + 1..k_end {
-                    let a = position[row_idx[t]];
-                    if a != usize::MAX {
-                        // Z is symmetric, so the stored entry Z[rows[a], k] is also
-                        // Z[k, rows[a]]: it contributes to both sums.
-                        acc[a] += z[t] * l_col[b];
-                        acc[b] += z[t] * l_col[a];
-                    }
-                }
-            }
-            for &row in rows {
-                position[row] = usize::MAX;
-            }
-            // The two recurrences: first the entries below the diagonal, then the diagonal.
-            let mut sum = 0.0;
-            for (a, value) in acc.iter().enumerate() {
-                let z_aj = -value / l_jj;
-                z[start + 1 + a] = z_aj;
-                sum += z_aj * l_col[a];
-            }
-            z[start] = (1.0 / l_jj - sum) / l_jj;
+    /// The selected inverse: the entries of `Z = (P A P')^-1` where `L` has non-zeros.
+    /// (This `Z` is not the `Z` of the model: the name is the convention for this
+    /// algorithm.)
+    ///
+    /// It is returned as a list laid out exactly as the values of `L` are: `z[t]` is the
+    /// entry of `Z` in the row and column in which `self.l_values[t]` is the entry of `L`.
+    /// The rows and columns are those of the renumbered matrix `P A P'`.
+    fn selected_inverse(&self) -> Vec<f64> {
+        match self.symbolic.raw() {
+            SymbolicCholeskyRaw::Simplicial(s) => simplicial_selected_inverse(s, &self.l_values),
+            SymbolicCholeskyRaw::Supernodal(s) => supernodal_selected_inverse(s, &self.l_values),
         }
-        read(col_ptr, row_idx, &z)
     }
 }
 
-/// The selected inverse of a supernodal factor, computed a supernode at a time and
-/// returned in the column layout of [`supernodal_columns`].
+/// Where the entry in row `row` and column `column` of `L` is in the list of its values,
+/// or `None` if `L` has no entry there.
 ///
-/// A supernode `J` is a run of consecutive columns of `L` that have the same rows below
-/// them, `R`. Its part of `L` is two dense blocks: `L_JJ`, lower triangular, for the rows
-/// of `J` itself, and `L_RJ` for the rows `R`. Takahashi's recurrences (see
-/// [`Factor::inverse_diagonal`]), written for all the columns of `J` at once, are
+/// `row` must not be smaller than `column`, since `L` is lower triangular, and both are
+/// numbers of the renumbered matrix `P A P'`. `raw` is the pattern of `L` in whichever of
+/// the two layouts it has.
+fn slot_in_l(raw: &SymbolicCholeskyRaw<usize>, row: usize, column: usize) -> Option<usize> {
+    match raw {
+        SymbolicCholeskyRaw::Simplicial(s) => {
+            // Column by column, as described in `design.rs`: the entries of this column
+            // are those from `start` up to where the next column starts. Their rows are
+            // sorted, so `binary_search` finds the place of `row` among them by
+            // bisection. (`.ok()?` reads: if it is not there, return `None` now.)
+            let start = s.col_ptr()[column];
+            let rows = &s.row_idx()[start..s.col_ptr()[column + 1]];
+            let place = rows.binary_search(&row).ok()?;
+            Some(start + place)
+        }
+        SymbolicCholeskyRaw::Supernodal(s) => {
+            // Supernode `node` groups the columns `begin[node]` up to, but not
+            // including, `end[node]`. The one that holds `column` is the first that ends
+            // after it. `partition_point` finds it by bisection: it counts the
+            // supernodes that end at or before `column`, which all come first.
+            let (begin, end) = (s.supernode_begin(), s.supernode_end());
+            let node = end.partition_point(|&e| e <= column);
+            let width = end[node] - begin[node];
+            // `below`: the rows that the columns of this supernode share below them
+            let below = s.supernode(node).pattern();
+            // The values of the supernode are one dense block, stored column after
+            // column. Each column has `width` entries for the rows of the supernode's
+            // own columns, then one for each row of `below`.
+            let height = width + below.len();
+            let row_in_block = if row < end[node] {
+                row - begin[node]
+            } else {
+                width + below.binary_search(&row).ok()?
+            };
+            let column_in_block = column - begin[node];
+            // `col_ptr_for_val()[node]` is where the block starts in the list of values.
+            Some(s.col_ptr_for_val()[node] + column_in_block * height + row_in_block)
+        }
+    }
+}
+
+/// The selected inverse of a simplicial factor: `Z = (P A P')^-1` on the pattern of `L`,
+/// in the layout of `l` (see `Factor::selected_inverse`).
+///
+/// Since `P A P' = L L'`, we have `Z L = (L')^-1`, which is upper triangular with
+/// `1 / L[j, j]` on its diagonal. Reading that equation one entry at a time gives
+/// Takahashi's recurrences (Takahashi, Fagan & Chin 1973; Erisman & Tinney 1975). For
+/// column `j` with below-diagonal rows `R_j`:
+///
+/// ```text
+/// Z[i, j] = -(1 / L[j, j]) * sum over k in R_j of Z[i, k] L[k, j]      for i in R_j
+/// Z[j, j] = (1 / L[j, j] - sum over k in R_j of Z[k, j] L[k, j]) / L[j, j]
+/// ```
+///
+/// Each column only needs entries of `Z` from later columns, so the columns are computed
+/// from the last to the first, and `A^-1` is never formed.
+fn simplicial_selected_inverse(s: &SymbolicSimplicialCholesky<usize>, l: &[f64]) -> Vec<f64> {
+    // Where the non-zeros of L are, column by column, as described in `design.rs`.
+    let (col_ptr, row_idx) = (s.col_ptr(), s.row_idx());
+    let n = s.nrows();
+    // z holds Z on the pattern of L: z[t] is the entry of Z where l[t] is the entry of L.
+    let mut z = vec![0.0; l.len()];
+    // The sums of the recurrences for the column being computed, one per row of R_j.
+    // (The list is created once and reused for every column.)
+    let mut acc: Vec<f64> = Vec::new();
+    // position[row] = place of `row` among the rows R_j of the column being computed,
+    // usize::MAX (the largest integer, used as "none") if it is not one of them
+    let mut position = vec![usize::MAX; n];
+    for j in (0..n).rev() {
+        let (start, end) = (col_ptr[j], col_ptr[j + 1]);
+        let l_jj = l[start]; // rows are sorted, so the diagonal comes first
+        let rows = &row_idx[start + 1..end];
+        let l_col = &l[start + 1..end];
+        // empty the list of sums, and refill it with a zero per row
+        acc.clear();
+        acc.resize(rows.len(), 0.0);
+        for (slot, &row) in rows.iter().enumerate() {
+            position[row] = slot;
+        }
+        // acc[a] = sum_b Z[rows[a], rows[b]] L[rows[b], j]. Every Z[rows[a], k] with
+        // k = rows[b] lives in column k of Z (its diagonal, or a row below it).
+        for (b, &k) in rows.iter().enumerate() {
+            let (k_start, k_end) = (col_ptr[k], col_ptr[k + 1]);
+            // the diagonal entry Z[k, k]
+            acc[b] += z[k_start] * l_col[b];
+            // the entries below it: column k is walked, and the rows in R_j picked out
+            for t in k_start + 1..k_end {
+                let a = position[row_idx[t]];
+                if a != usize::MAX {
+                    // Z is symmetric, so the stored entry Z[rows[a], k] is also
+                    // Z[k, rows[a]]: it contributes to both sums.
+                    acc[a] += z[t] * l_col[b];
+                    acc[b] += z[t] * l_col[a];
+                }
+            }
+        }
+        for &row in rows {
+            position[row] = usize::MAX;
+        }
+        // The two recurrences: first the entries below the diagonal, then the diagonal.
+        let mut sum = 0.0;
+        for (a, value) in acc.iter().enumerate() {
+            let z_aj = -value / l_jj;
+            z[start + 1 + a] = z_aj;
+            sum += z_aj * l_col[a];
+        }
+        z[start] = (1.0 / l_jj - sum) / l_jj;
+    }
+    z
+}
+
+/// The selected inverse of a supernodal factor: `Z = (P A P')^-1` on the pattern of `L`,
+/// in the layout of `l_values` (see `Factor::selected_inverse`).
+///
+/// This is the calculation of `simplicial_selected_inverse`, done for all the columns of
+/// a supernode at once. A supernode `J` is a run of consecutive columns of `L` that have
+/// the same rows below them, `R`. Its part of `L` is two dense blocks:
+///
+/// ```text
+///         columns J
+///        [  L_JJ  ]   rows J: a square block, zero above its diagonal
+///        [  L_RJ  ]   rows R: the rows below, which all the columns of J share
+/// ```
+///
+/// The equation `Z L = (L')^-1`, read for the columns `J`, gives
 ///
 /// ```text
 /// Y    = L_RJ L_JJ^-1
@@ -427,31 +471,43 @@ impl Factor {
 ///
 /// where `Z_RR` holds the entries of `Z` for every pair of rows of `R`. Those belong to
 /// later supernodes, which is why the supernodes are taken from the last to the first.
-/// The products are ordinary dense matrix products, which a processor does several
-/// times faster than the same arithmetic one entry at a time.
+/// These are products of ordinary dense matrices, which faer does several times faster
+/// than the same arithmetic done one entry at a time.
 fn supernodal_selected_inverse(
     s: &SymbolicSupernodalCholesky<usize>,
     l_values: &[f64],
 ) -> Vec<f64> {
     let n = s.nrows();
+    // Supernode j groups the columns begin[j] up to, but not including, end[j]. Its
+    // values are the entries val_ptr[j] up to val_ptr[j + 1] of `l_values`.
     let (begin, end, val_ptr) = (s.supernode_begin(), s.supernode_end(), s.col_ptr_for_val());
-    // the supernode of every column
+    // supernode_of[c]: the supernode that holds column c.
+    // (`.fill(j)` sets every entry of that part of the list to j.)
     let mut supernode_of = vec![0usize; n];
     for j in 0..s.n_supernodes() {
         supernode_of[begin[j]..end[j]].fill(j);
     }
     // Z is kept in the layout of L: for each supernode, a dense block with a column per
-    // column of the supernode. Its first rows are Z_JJ (its lower triangle only, since it
-    // is symmetric) and the rest Z_RJ, in the order of R.
+    // column of the supernode. The first rows of the block are Z_JJ (only its lower
+    // triangle is filled in, since it is symmetric) and the rest are Z_RJ, in the order
+    // of R.
     let mut z_values = vec![0.0; l_values.len()];
-    // position[row]: where `row` is among the rows R of the supernode being read from
+    // position[row]: the place of `row` among the rows below the supernode that is being
+    // read from. It is filled in just before it is used.
     let mut position = vec![0usize; n];
-    // scratch for L_JJ^-1, Y and Z_RR, reused from supernode to supernode
+    // Working space for L_JJ^-1, Y and Z_RR. The three lists are created once and reused
+    // for every supernode, rather than asking for memory each time.
     let (mut inverse_buffer, mut y_buffer, mut z_rr_buffer) = (Vec::new(), Vec::new(), Vec::new());
     for j in (0..s.n_supernodes()).rev() {
+        // width: the number of columns of J. rows: R. m: the number of rows of R.
         let width = end[j] - begin[j];
         let rows = s.supernode(j).pattern();
         let m = rows.len();
+        // The values of the supernode, seen as a matrix with `width + m` rows and `width`
+        // columns, without copying them. (`MatRef` is faer's read-only view of a matrix,
+        // and `MatMut`, below, a view that can be written to. The flat list holds the
+        // matrix column after column, hence `column_major`.) Its first `width` rows are
+        // L_JJ, and the `m` rows after them L_RJ.
         let l_block = MatRef::from_column_major_slice(
             &l_values[val_ptr[j]..val_ptr[j + 1]],
             width + m,
@@ -460,15 +516,26 @@ fn supernodal_selected_inverse(
         let (l_jj, l_rj) = (l_block.subrows(0, width), l_block.subrows(width, m));
 
         // ---- L_JJ^-1 and Y = L_RJ L_JJ^-1 ----
-        // L_JJ and its inverse are lower triangular. The products below are told which
-        // of their matrices are triangular, so that they skip the zeros.
+        // Empty the working list and refill it with zeros, view it as a square matrix,
+        // and write the inverse of L_JJ into it. The inverse of a lower triangular
+        // matrix is lower triangular too. (`.as_mut()` lends a matrix to a function to
+        // write to, and `.as_ref()` to read from.)
         inverse_buffer.clear();
         inverse_buffer.resize(width * width, 0.0);
         let mut inverse = MatMut::from_column_major_slice_mut(&mut inverse_buffer, width, width);
         invert_lower_triangular(inverse.as_mut(), l_jj, Par::Seq);
+        // The same for Y, which has m rows and `width` columns.
         y_buffer.clear();
         y_buffer.resize(m * width, 0.0);
         let mut y = MatMut::from_column_major_slice_mut(&mut y_buffer, m, width);
+        // faer's matrix products take, in this order: the matrix that receives the
+        // result; whether the result replaces what is there or is added to it; the two
+        // matrices to multiply; a number that multiplies their product; and `Par::Seq`,
+        // "on one thread". In `triangular_matmul` each matrix is followed by the part
+        // of it to use: all of it (`Rectangular`), or only its lower or upper triangle,
+        // the rest being zeros that are skipped.
+        //
+        // This call is Y = 1.0 * L_RJ * L_JJ^-1.
         triangular_matmul(
             y.as_mut(),
             BlockStructure::Rectangular,
@@ -482,33 +549,41 @@ fn supernodal_selected_inverse(
         );
 
         // ---- Z_RR, gathered from the later supernodes ----
+        // Z_RR has m rows and m columns: its entry (a, b) is Z[rows[a], rows[b]], kept
+        // at place a + m * b of the flat list. Each column rows[b] of Z belongs to a
+        // later supernode, k. Neighbouring rows of R often belong to the same one, so
+        // the outer loop finds k, and the inner loop deals with every row of R that is
+        // a column of k before moving on.
         z_rr_buffer.clear();
         z_rr_buffer.resize(m * m, 0.0);
         let mut b = 0;
         while b < m {
-            // The supernode k that holds column rows[b], and its block of Z.
             let k = supernode_of[rows[b]];
             let (k_start, k_width) = (begin[k], end[k] - begin[k]);
+            // Note where each of the rows below k is among them.
             let k_rows = s.supernode(k).pattern();
             for (t, &row) in k_rows.iter().enumerate() {
                 position[row] = t;
             }
+            // The block of Z for supernode k, computed in an earlier pass of the loop
+            // over j: `k_height` entries for each of its columns.
             let k_height = k_width + k_rows.len();
             let z_k = &z_values[val_ptr[k]..val_ptr[k + 1]];
-            // Every row of R from rows[b] on that is a column of k is handled now.
             while b < m && rows[b] < end[k] {
+                // the column of the block that is column rows[b] of Z
                 let column = rows[b] - k_start;
                 let z_column = &z_k[column * k_height..(column + 1) * k_height];
                 for a in b..m {
-                    // Z[rows[a], rows[b]]: row rows[a] is either a column of k too, in
-                    // the first rows of its block, or one of the rows below k. (It is
-                    // always one or the other: two rows of one column of L share an
-                    // entry.)
+                    // Z[rows[a], rows[b]]. Row rows[a] is either a column of k too, in
+                    // which case the entry is in the first rows of the block, or one
+                    // of the rows below k. (It is always one or the other: two rows of
+                    // one column of L share an entry.)
                     let value = if rows[a] < end[k] {
                         z_column[rows[a] - k_start]
                     } else {
                         z_column[k_width + position[rows[a]]]
                     };
+                    // Z is symmetric, so the entry (b, a) is the same number.
                     z_rr_buffer[a + m * b] = value;
                     z_rr_buffer[b + m * a] = value;
                 }
@@ -518,12 +593,16 @@ fn supernodal_selected_inverse(
         let z_rr = MatRef::from_column_major_slice(&z_rr_buffer, m, m);
 
         // ---- Z_RJ = -Z_RR Y, and Z_JJ = (L_JJ L_JJ')^-1 - Y' Z_RJ ----
+        // The block of Z for this supernode, viewed as a matrix that can be written to,
+        // and split into its first `width` rows (Z_JJ) and the rest (Z_RJ).
         let z_block = MatMut::from_column_major_slice_mut(
             &mut z_values[val_ptr[j]..val_ptr[j + 1]],
             width + m,
             width,
         );
         let (mut z_jj, mut z_rj) = z_block.split_at_row_mut(width);
+        // Z_RJ = -1.0 * Z_RR * Y. (`matmul` is the product for matrices that are used
+        // in full, so it takes no parts.)
         matmul(
             z_rj.as_mut(),
             Accum::Replace,
@@ -532,9 +611,11 @@ fn supernodal_selected_inverse(
             -1.0,
             Par::Seq,
         );
-        // (L_JJ L_JJ')^-1 = (L_JJ^-1)' L_JJ^-1: an upper triangular matrix times a lower
-        // one. Only the lower triangle of the result is computed.
+        // From here on the inverse of L_JJ is only read.
         let inverse = inverse.as_ref();
+        // Z_JJ = (L_JJ L_JJ')^-1, which is (L_JJ^-1)' L_JJ^-1: an upper triangular
+        // matrix times a lower triangular one. Only the lower triangle of the result
+        // is computed, because Z_JJ is symmetric and only that triangle is read.
         triangular_matmul(
             z_jj.as_mut(),
             BlockStructure::TriangularLower,
@@ -546,6 +627,7 @@ fn supernodal_selected_inverse(
             1.0,
             Par::Seq,
         );
+        // Z_JJ = Z_JJ - Y' Z_RJ: the product is added to what is there, times -1.0.
         triangular_matmul(
             z_jj.as_mut(),
             BlockStructure::TriangularLower,
@@ -558,34 +640,7 @@ fn supernodal_selected_inverse(
             Par::Seq,
         );
     }
-    supernodal_columns(s, &z_values).2
-}
-
-/// The columns of a supernodal `L` in compressed sparse column form, each with its diagonal
-/// first, as a simplicial factor stores them.
-///
-/// Returns `(col_ptr, row_idx, values)`, laid out as described in `design.rs`.
-fn supernodal_columns(
-    s: &SymbolicSupernodalCholesky<usize>,
-    l_values: &[f64],
-) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
-    let llt = SupernodalLltRef::<usize, f64>::new(s, l_values);
-    let (mut col_ptr, mut row_idx, mut values) = (vec![0], Vec::new(), Vec::new());
-    for si in 0..s.n_supernodes() {
-        // A dense block of consecutive columns: the diagonal block, then the rows of the
-        // supernode's pattern.
-        let node = llt.supernode(si);
-        let (start, block) = (node.start(), node.val());
-        for k in 0..block.ncols() {
-            // Column k of the block: from its diagonal entry down to the end of the
-            // diagonal block, then the rows that all columns of the supernode share.
-            row_idx.extend(start + k..start + block.ncols());
-            row_idx.extend_from_slice(node.pattern());
-            values.extend(block.col(k).iter().skip(k));
-            col_ptr.push(row_idx.len());
-        }
-    }
-    (col_ptr, row_idx, values)
+    z_values
 }
 
 /// `log |A|` from a dense Cholesky factorisation of `A`.

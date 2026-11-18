@@ -96,6 +96,12 @@ class LmmFit:
         of each covariate, in the order of their columns. Empty if there are neither.
     beta_se : np.ndarray
         Standard errors of ``beta`` [``bias_std_err``].
+    beta_cov : np.ndarray
+        Covariance matrix of ``beta`` (lme4's ``vcov``), with a row and a column per
+        fixed effect. Its diagonal holds the squares of ``beta_se``. The other entries
+        are needed for the standard error of a combination of coefficients: that of
+        the difference of the first two covariates' is
+        ``sqrt(c @ beta_cov @ c)`` with ``c = [0, 1, -1, 0, ...]``.
     ranef : list of np.ndarray
         Conditional modes (BLUPs) of each factor's random effects, aligned with
         ``levels``: ``ranef[0][i]`` is the term of event ``levels[0][i]`` [the event
@@ -121,6 +127,7 @@ class LmmFit:
     sigma: float
     beta: np.ndarray
     beta_se: np.ndarray
+    beta_cov: np.ndarray
     ranef: list[np.ndarray]
     condsd: list[np.ndarray]
     fitted: np.ndarray
@@ -216,10 +223,11 @@ def fit_lmm(
     Labels are compared as strings, so ``1`` and ``"1"`` are the same level, while ``1``
     and ``1.0`` are different ones (``"1"`` and ``"1.0"``).
 
-    The fit is done on ``y`` less its least-squares fit on the fixed effects (its mean,
-    when the intercept is the only one), and the coefficients of that fit are added
-    back to ``beta``. This changes no result, and keeps the fit accurate however large
-    the mean of ``y``, or its trend with a covariate, is compared with its spread.
+    The fit is done on an equivalent, better-conditioned form of the fixed effects
+    (orthonormal combinations of their columns) and on ``y`` less its least-squares fit
+    on them, and the estimates are turned back afterwards. This changes no result, and
+    keeps the fit accurate however large the mean of ``y`` or of a covariate is compared
+    with its spread, and however alike two covariates are.
 
     The result does not depend on ``start``, to the precision of the search, but the
     number of evaluations does. When many similar datasets are fitted, as in a bootstrap,
@@ -232,10 +240,10 @@ def fit_lmm(
     of 150,000 records took a third of the time they take one after another. Small fits
     gain less, because the search itself (scipy's COBYQA) is Python code.
 
-    Covariates are used as given. Subtracting a typical value from each (magnitude less
-    6, say) makes the intercept the mean at that value rather than at zero, changes
-    nothing else, and keeps the arithmetic accurate. ``docs/adding_models.md`` has more
-    advice on covariates, and on comparing models with and without one.
+    Subtracting a typical value from a covariate (magnitude less 6, say) makes the
+    intercept the mean at that value rather than at zero, and changes nothing else.
+    ``docs/adding_models.md`` has more advice on covariates, and on comparing models
+    with and without one.
 
     The criterion does lose precision when a random-effect standard deviation is
     hundreds of times larger than the residual standard deviation: at a thousand times,
@@ -333,36 +341,58 @@ def fit_lmm(
         if not (np.all(np.isfinite(y)) and np.all(np.isfinite(x))):
             raise ValueError("y or the covariates contain NaN or infinite values")
 
-        # The engine is not given y itself, but y less its least-squares fit on the
-        # fixed effects: what an ordinary regression of y on the columns of x, ignoring
-        # the groups, leaves over. With only an intercept, that is y less its mean. The
-        # coefficients of that regression (start_beta) are added back to beta after the
-        # fit. This changes no result, because the model can express the same shift
-        # through beta, and it keeps the arithmetic accurate: the engine finds a sum of
-        # squares by subtraction, which loses digits when the mean of y, or its trend
-        # with a covariate, is far larger than its spread.
-        start_beta = np.zeros(x.shape[1])
-        if x.shape[1] > 0:
-            # Each column is scaled to length 1 first, so that neither the regression
-            # nor the check below depends on the units of the covariates.
+        # The engine is not given x and y themselves, but a tidier pair that describes
+        # the same model, so that its arithmetic stays accurate whatever the scales of
+        # the covariates and of y.
+        #
+        # In place of x it gets q, whose columns are combinations of the columns of x
+        # that have length 1 and are at right angles to each other ("orthonormal"). Any
+        # trend that the columns of x can describe, the columns of q can describe as
+        # well, so the fitted values are the same. But the columns of q cannot be nearly
+        # alike, as a covariate with a large mean and the column of ones are, which is
+        # what costs digits. numpy's QR decomposition finds q, and the triangular matrix
+        # r that turns q back into x: x / lengths = q @ r.
+        #
+        # In place of y it gets what an ordinary regression of y on the fixed effects,
+        # ignoring the groups, leaves over (y less its mean, with only an intercept).
+        # The engine finds a sum of squares by subtraction, which loses digits when the
+        # mean of y, or its trend with a covariate, is far larger than its spread.
+        #
+        # gamma denotes the coefficients of the columns of q, and beta those of x. They
+        # describe the same trend, q @ gamma = x @ beta, so beta = from_gamma @ gamma
+        # with the matrix from_gamma below.
+        n_fixed = x.shape[1]
+        gamma_start = np.zeros(n_fixed)  # the regression's part of gamma
+        from_gamma = np.zeros((n_fixed, n_fixed))
+        log_det_change = 0.0
+        q = x
+        if n_fixed > 0:
+            # Each column is scaled to length 1 first, so that nothing below depends on
+            # the units of the covariates.
             lengths = np.linalg.norm(x, axis=0)
-            rank = 0
             if np.all(lengths > 0.0):
-                scaled_beta, _, rank, _ = np.linalg.lstsq(x / lengths, y, rcond=None)
-                start_beta = scaled_beta / lengths
-            # The rank is the number of columns that are not combinations of the
-            # others. If it is less than the number of columns, their coefficients
-            # cannot be told apart, and the engine would fail or return meaningless
-            # coefficients with enormous standard errors, depending on rounding.
-            if rank < x.shape[1]:
+                q, r = np.linalg.qr(x / lengths)
+                # An entry on the diagonal of r is how much of a column of x is not a
+                # combination of the columns before it.
+                independent = np.abs(np.diag(r))
+            else:
+                independent = lengths
+            # If a column is a combination of the others, to within rounding, their
+            # coefficients cannot be told apart.
+            if independent.min() <= max(x.shape) * np.finfo(float).eps:
                 raise ValueError(
                     "the fixed effects are collinear: one column (the intercept or a "
                     "covariate) is a combination of the others"
                 )
+            from_gamma = np.linalg.inv(r) / lengths[:, np.newaxis]
+            gamma_start = q.T @ y
+            # log|X'V^-1X|, a term of the REML criterion, is larger for x than for q by
+            # this constant. It does not depend on theta, so the search is unaffected.
+            log_det_change = 2.0 * np.log(independent * lengths).sum()
         # Creating the model reduces the data to sums per level, once. After that,
         # model.deviance(theta) is the criterion at any theta.
         n_levels = [level.size for level in levels]
-        model = _lmm.CrossedModel(codes, n_levels, y - x @ start_beta, x, reml=reml)
+        model = _lmm.CrossedModel(codes, n_levels, y - q @ gamma_start, q, reml=reml)
         n_factors = len(codes)
 
         # ---- 3. Search for the theta with the smallest criterion ----
@@ -434,7 +464,11 @@ def fit_lmm(
 
         # ---- 4. The estimates at that theta ----
         out = model.fit_at(theta.tolist())
-        beta = out["beta"] + start_beta
+        # The engine's fixed effects are the coefficients of q, less the regression's
+        # part. Turn them, and their covariance matrix, into those of x.
+        gamma = out["beta"] + gamma_start
+        beta = from_gamma @ gamma
+        beta_cov = from_gamma @ out["beta_cov"] @ from_gamma.T
         # The engine returns the random effects of all factors in one array: those of
         # the first factor's levels, then the second's. Cut it back into one array per
         # factor, each aligned with that factor's levels.
@@ -444,7 +478,7 @@ def fit_lmm(
         # Fitted values: the fixed effects plus, for each factor, the term of the
         # observation's level. b[code[has_level]] looks up that term for every
         # observation that has a level in the factor.
-        fitted = x @ beta
+        fitted = q @ gamma  # the same as x @ beta, computed more accurately
         for b, code in zip(ranef, codes):
             has_level = code >= 0
             fitted[has_level] += b[code[has_level]]
@@ -453,12 +487,13 @@ def fit_lmm(
             theta=theta,
             sigma=float(out["sigma"]),
             beta=beta,
-            beta_se=out["beta_se"],
+            beta_se=np.sqrt(np.diag(beta_cov)),
+            beta_cov=beta_cov,
             ranef=ranef,
             condsd=condsd,
             fitted=fitted,
             resid=y - fitted,
-            deviance=float(out["deviance"]),
+            deviance=float(out["deviance"]) + (log_det_change if reml else 0.0),
             converged=bool(result.success),
             n_evals=int(result.nfev),
         )

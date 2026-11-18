@@ -16,7 +16,7 @@
 //! - `#[pymodule]` defines the module itself.
 
 use mera_lmm::{CrossedModel, Design, LmmError};
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -105,8 +105,11 @@ impl PyCrossedModel {
         let out = PyDict::new(py);
         out.set_item("deviance", fit.deviance)?;
         out.set_item("sigma", fit.sigma)?;
+        let p = fit.beta.len();
         out.set_item("beta", fit.beta.into_pyarray(py))?;
         out.set_item("beta_se", fit.beta_se.into_pyarray(py))?;
+        // the covariance matrix arrives as one list, row by row: give it its p x p shape
+        out.set_item("beta_cov", fit.beta_cov.into_pyarray(py).reshape([p, p])?)?;
         out.set_item("ranef", fit.ranef.into_pyarray(py))?;
         out.set_item("condsd", fit.condsd.into_pyarray(py))?;
         Ok(out)

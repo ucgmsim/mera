@@ -448,3 +448,61 @@ def test_a_missing_label_has_no_code(labels: np.ndarray) -> None:
     levels, codes = _encode_labels(labels)
     assert codes[1] == -1 and np.all(np.delete(codes, 1) >= 0)
     assert levels.size == 2
+
+
+@pytest.mark.parametrize("offset", [1e4, 1e6])
+def test_a_covariate_with_a_large_mean_costs_no_precision(offset: float) -> None:
+    """A covariate that is far from zero compared with its spread, such as a year or a
+    coordinate in metres, must fit as well as the same covariate less a constant.
+    Fitted as given, covariates with a mean of 1e4 had theta out by 1e-4, and with 1e6
+    by 6e-3, reported as converged."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    moved = fit_lmm(y, groups, covariates=covariates + offset)
+    assert moved.converged
+    np.testing.assert_allclose(moved.theta, base.theta, atol=1e-6)
+    assert moved.sigma == pytest.approx(base.sigma, abs=1e-7)
+    np.testing.assert_allclose(moved.beta[1:], base.beta[1:], atol=1e-7)
+    np.testing.assert_allclose(moved.beta_se[1:], base.beta_se[1:], atol=1e-7)
+    # the intercept is now the mean where both covariates are zero, far from the data
+    expected_intercept = base.beta[0] - offset * base.beta[1:].sum()
+    assert moved.beta[0] == pytest.approx(expected_intercept, rel=1e-7)
+    np.testing.assert_allclose(moved.fitted, base.fitted, atol=1e-6)
+
+
+def test_nearly_collinear_covariates_cost_no_precision() -> None:
+    """Two covariates that are almost the same describe the same model as one of them
+    and their difference. Their coefficients are large and poorly determined, but
+    theta and the fitted values must not suffer: fitted as given, theta was out by
+    up to 1e-2."""
+    y, groups, covariates = covariate_data()
+    first, second = covariates.T
+    base = fit_lmm(y, groups, covariates=covariates)
+    close = fit_lmm(
+        y, groups, covariates=np.column_stack([first, first + 1e-6 * second])
+    )
+    assert close.converged
+    np.testing.assert_allclose(close.theta, base.theta, atol=1e-6)
+    np.testing.assert_allclose(close.fitted, base.fitted, atol=1e-6)
+    # b1 * first + b2 * second = (b1 - b2 / 1e-6) * first + (b2 / 1e-6) * (first + 1e-6 * second)
+    assert close.beta[2] == pytest.approx(base.beta[2] / 1e-6, rel=1e-6)
+
+
+def test_beta_cov_is_the_covariance_of_the_fixed_effects() -> None:
+    y, groups, covariates = covariate_data()
+    fit = fit_lmm(y, groups, covariates=covariates)
+    assert fit.beta_cov.shape == (3, 3)
+    np.testing.assert_allclose(fit.beta_cov, fit.beta_cov.T, rtol=1e-10)
+    np.testing.assert_allclose(np.sqrt(np.diag(fit.beta_cov)), fit.beta_se, rtol=1e-12)
+    # sigma^2 (X'V^-1X)^-1 from the dense implementation, at the same theta
+    x = np.column_stack([np.ones(y.size), covariates])
+    z, level_factor, _ = walkthrough.indicator_matrix(groups)
+    at = walkthrough.evaluate(fit.theta, walkthrough.Model(y, x, z, level_factor))
+    expected = at.r2 / at.dof * np.linalg.inv(at.xvx)
+    np.testing.assert_allclose(fit.beta_cov, expected, rtol=1e-7)
+    # The standard error of the difference of two coefficients needs the covariance.
+    difference = np.array([0.0, 1.0, -1.0])
+    assert np.sqrt(difference @ fit.beta_cov @ difference) == pytest.approx(
+        np.sqrt(difference @ expected @ difference), rel=1e-7
+    )
+    assert fit_lmm(y, groups, intercept=False).beta_cov.shape == (0, 0)

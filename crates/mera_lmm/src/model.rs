@@ -95,7 +95,8 @@
 //! hundreds of times larger than sigma: at a thousand times, theta is good to about four
 //! digits. `mera.lmm.fit_lmm` removes the first of these causes: before it calls this
 //! crate, it subtracts from the response its least-squares fit on the fixed effects (its
-//! mean, when the intercept is the only one).
+//! mean, when the intercept is the only one). It also hands over the fixed effects as
+//! orthonormal columns, so that `X'V^-1X` is well conditioned whatever their scales.
 
 use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::{Col, Mat, MatRef, Side};
@@ -119,6 +120,10 @@ pub struct Fit {
     pub beta: Vec<f64>,
     /// Standard errors of `beta`, `sqrt(diag(vcov))`.
     pub beta_se: Vec<f64>,
+    /// Covariance matrix of `beta` (lme4's `vcov`), `p x p`, row by row. Its diagonal holds
+    /// the squares of `beta_se`; the other entries say how the estimates vary together,
+    /// which the standard error of a difference between two of them needs.
+    pub beta_cov: Vec<f64>,
     /// Conditional modes (BLUPs) of the random effects, factors stacked in `Design` order:
     /// mera's event terms, followed by its site terms.
     pub ranef: Vec<f64>,
@@ -200,6 +205,11 @@ impl CrossedModel {
         let beta_se = (0..p)
             .map(|a| (sigma2 * xvx_inverse[(a, a)]).sqrt())
             .collect();
+        // every pair (a, b) of fixed effects, row by row
+        let beta_cov = (0..p)
+            .flat_map(|a| (0..p).map(move |b| (a, b)))
+            .map(|(a, b)| sigma2 * xvx_inverse[(a, b)])
+            .collect();
         // var(b | y, beta) = sigma^2 Lambda A^-1 Lambda'
         // Only its diagonal is needed: the variance of level i is
         // sigma^2 * lambda_i^2 * (A^-1)[i, i], and condsd is its square root.
@@ -213,6 +223,7 @@ impl CrossedModel {
             sigma,
             beta: profile.beta.iter().copied().collect(),
             beta_se,
+            beta_cov,
             ranef: ranef.iter().copied().collect(),
             condsd,
         })
@@ -332,11 +343,40 @@ mod tests {
             for (values, expected_values) in [
                 (&fit.beta, &expected.beta),
                 (&fit.beta_se, &expected.beta_se),
+                (&fit.beta_cov, &expected.beta_cov),
                 (&fit.ranef, &expected.ranef),
                 (&fit.condsd, &expected.condsd),
             ] {
                 assert_abs_diff_eq!(values[..], expected_values[..], epsilon = 1e-10);
             }
+        }
+    }
+
+    #[test]
+    fn the_standard_errors_are_the_diagonal_of_the_covariance() {
+        // Two fixed effects: an intercept and a covariate.
+        let mut rng = Lcg::new(3);
+        let n = 120;
+        let events = (0..n).map(|_| rng.below(15)).collect();
+        let y: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
+        let covariate = (0..n).map(|_| rng.normal());
+        // x is column-major: the column of ones, then the covariate
+        let x: Vec<f64> = std::iter::repeat_n(1.0, n).chain(covariate).collect();
+        let design = Design::from_full_codes(&[events], &y, &x, 2).unwrap();
+        let fit = CrossedModel::new(design, true)
+            .unwrap()
+            .fit_at(&[0.7])
+            .unwrap();
+        // beta_cov is 2 x 2, row by row: [var(b0), cov, cov, var(b1)]
+        assert_eq!(fit.beta_cov.len(), 4);
+        assert_relative_eq!(fit.beta_cov[1], fit.beta_cov[2], max_relative = 1e-12);
+        assert!(fit.beta_cov[1] != 0.0);
+        for a in 0..2 {
+            assert_relative_eq!(
+                fit.beta_cov[3 * a].sqrt(),
+                fit.beta_se[a],
+                max_relative = 1e-12
+            );
         }
     }
 }

@@ -29,6 +29,9 @@ class FitAt(TypedDict):
     """The fixed effects, one per column of ``x``."""
     beta_se: npt.NDArray[np.float64]
     """The standard errors of ``beta``."""
+    beta_cov: npt.NDArray[np.float64]
+    """The covariance matrix of ``beta``, of shape (p, p). Its diagonal holds the squares
+    of ``beta_se``."""
     ranef: npt.NDArray[np.float64]
     """The random effects: those of the first factor's levels (level 0, 1, ...), followed
     by the second factor's, and so on."""

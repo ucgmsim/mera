@@ -50,6 +50,7 @@ CONTROL = (
     "maxeval = 1e5)"
 )
 lme4 = importr("lme4")
+base, stats = importr("base"), importr("stats")
 
 
 def lmer(
@@ -135,6 +136,12 @@ def fit_lme4(
     coefs = (
         model.coefs if has_fixed_effects else pd.DataFrame(columns=["Estimate", "SE"])
     )
+    # lme4's covariance matrix of the fixed effects, as an ordinary matrix
+    beta_cov = (
+        np.asarray(base.as_matrix(stats.vcov(model.model_obj)), dtype=float)
+        if has_fixed_effects
+        else np.zeros((0, 0))
+    )
     fitted = np.asarray(model.fits, dtype=float)
     return LmmFit(
         levels=levels,
@@ -142,6 +149,7 @@ def fit_lme4(
         sigma=float(model.ranef_var.loc["Residual", "Std"]),
         beta=coefs["Estimate"].to_numpy(dtype=float),
         beta_se=coefs["SE"].to_numpy(dtype=float),
+        beta_cov=beta_cov,
         ranef=[b["condval"].to_numpy() for b in by_level],
         condsd=[b["condsd"].to_numpy() for b in by_level],
         fitted=fitted,

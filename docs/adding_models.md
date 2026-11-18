@@ -152,13 +152,21 @@ each other class is the offset of that class from it. Giving every class a colum
 as a bias, is an error: the columns then add up to the column of ones that stands for the
 bias (they are *collinear*), and their coefficients cannot be told apart.
 
+`fit.beta_se` gives the standard error of each coefficient. The standard error of a
+combination of them, such as the difference between the two class offsets, also depends
+on how their estimates vary together, which is in `fit.beta_cov`:
+
+```python
+c = np.array([0, 0, 0, 1, -1])  # ridge offset minus valley offset
+difference, std_err = c @ fit.beta, np.sqrt(c @ fit.beta_cov @ c)
+```
+
 Advice on covariates:
 
 - Subtract a typical value, as in `magnitude - 6.0`. The bias is then the average residual
-  at magnitude 6 rather than at magnitude 0. It also keeps the arithmetic accurate: a
-  covariate whose mean is thousands of times its spread, such as a year or a coordinate in
-  metres, costs digits: at ten thousand times, the standard deviations are good to about
-  four digits.
+  at magnitude 6 rather than at magnitude 0. Nothing else changes, and the fit is as
+  accurate either way, also for a covariate that is far from zero compared with its
+  spread, such as a year or a coordinate in metres.
 - A covariate must vary, and must not be an exact combination of the other columns
   (magnitude and magnitude + 1, with a bias, is one). `fit_lmm` stops with an error that
   says the fixed effects are collinear. Covariates that are nearly, but not exactly, a

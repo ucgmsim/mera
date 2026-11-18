@@ -1,3 +1,4 @@
+import multiprocessing as mp
 import re
 from unittest.mock import patch
 
@@ -251,6 +252,28 @@ def test_non_convergence_warning_names_the_im(
     message = f"did not converge for IM {ims[0]}"
     with pytest.warns(RuntimeWarning, match=re.escape(message)):
         run_example(res_df, [ims[0]])
+
+
+@pytest.mark.skipif(
+    "fork" not in mp.get_all_start_methods(),
+    reason="the workers must inherit the patched MAX_EVALUATIONS, which needs fork",
+)
+# Python warns that fork is unsafe in a process with threads, which pytest's is.
+@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
+def test_non_convergence_warning_reaches_the_caller_from_worker_processes(
+    res_df: pd.DataFrame, ims: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warning raised in a worker process is lost unless run_mera passes it on to the
+    process that called it."""
+    monkeypatch.setattr("mera.lmm.MAX_EVALUATIONS", 3)
+    # Workers started by fork are copies of this process, patch included. Started the
+    # default way, they would import mera afresh, with the real MAX_EVALUATIONS.
+    monkeypatch.setattr("mera.analysis.mp", mp.get_context("fork"))
+    with pytest.warns(RuntimeWarning) as caught:
+        run_example(res_df, ims[:2], n_procs=2)
+    messages = [str(warning.message) for warning in caught]
+    for im in ims[:2]:
+        assert any(f"did not converge for IM {im}" in message for message in messages)
 
 
 def test_old_import_path_still_works() -> None:

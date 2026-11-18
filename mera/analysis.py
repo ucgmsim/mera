@@ -26,6 +26,7 @@ How the work is divided:
 """
 
 import multiprocessing as mp
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -343,6 +344,8 @@ def run_mera(
     -----
     RuntimeWarning
         If the optimiser does not converge for an IM. Its results are still returned.
+        The warning is given when all the fits are done, also when they ran in worker
+        processes.
 
     Notes
     -----
@@ -399,6 +402,13 @@ def run_mera(
         # returns the results in the order of the tasks.
         with mp.Pool(processes=n_procs) as pool:
             results = pool.starmap(_run_im_mera, tasks)
+
+    # Pass on the warnings of the fits, such as that of a search that did not converge.
+    # A warning raised in a worker process would never reach the caller of run_mera, so
+    # _run_im_mera collects them and they are raised again here.
+    for cur_result in results:
+        for category, message in cur_result["warnings"]:
+            warnings.warn(message, category, stacklevel=2)
 
     # Unpack results
     # Each result holds one IM's series: put them side by side, one column per IM.
@@ -565,6 +575,8 @@ def _run_im_mera(
         "fit_series": fit_series,
         "site_res_series": site_res_series,
         "site_cond_std_series": site_cond_std_series,
+        # (category, message) of each warning raised by the fit, for run_mera to pass on
+        "warnings": [],
     }
 
     # Nothing to fit if the mask leaves no records: the results stay NaN
@@ -596,9 +608,16 @@ def _run_im_mera(
     # groups holds the event id of each record used and, if a site term is fitted,
     # the site id of each: the grouping factors of the model.
     groups = [cur_residual_df[c].to_numpy() for c in random_effects_columns]
-    fit = fit_lmm(
-        cur_residual_df[im].to_numpy(), groups, intercept=assume_biased, name=f"IM {im}"
-    )
+    # The warnings of the fit are collected rather than shown: see run_mera.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit = fit_lmm(
+            cur_residual_df[im].to_numpy(),
+            groups,
+            intercept=assume_biased,
+            name=f"IM {im}",
+        )
+    result["warnings"] = [(w.category, str(w.message)) for w in caught]
 
     # Event (and site) terms, their conditional standard deviations,
     # and the standard deviations of the random effects

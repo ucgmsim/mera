@@ -306,14 +306,20 @@ def fit_lmm(
                     f"got shape {extra.shape}"
                 )
             x = np.column_stack([x, extra])
-            # If one column is an exact combination of the others, their coefficients
-            # cannot be told apart. The engine would then fail, or return meaningless
-            # coefficients with enormous standard errors, depending on rounding.
-            if np.all(np.isfinite(x)) and np.linalg.matrix_rank(x) < x.shape[1]:
-                raise ValueError(
-                    "the fixed effects are collinear: one column (the intercept or a "
-                    "covariate) is an exact combination of the others"
-                )
+            # If one column is a combination of the others, their coefficients cannot be
+            # told apart. The engine would then fail, or return meaningless coefficients
+            # with enormous standard errors, depending on rounding. Each column is
+            # scaled to length 1 first, so that the check does not depend on the units
+            # of the covariates. (NaN or infinite values are reported by the engine.)
+            if np.all(np.isfinite(x)):
+                lengths = np.linalg.norm(x, axis=0)
+                if np.any(lengths == 0.0) or (
+                    np.linalg.matrix_rank(x / lengths) < x.shape[1]
+                ):
+                    raise ValueError(
+                        "the fixed effects are collinear: one column (the intercept or "
+                        "a covariate) is a combination of the others"
+                    )
         # With an intercept, the engine is given y less its mean, and the mean is added
         # back to the intercept afterwards. Moving y by a constant changes nothing else
         # in a model with an intercept, and it keeps the arithmetic accurate: the engine

@@ -32,6 +32,8 @@ LME4_FITS = (
         for intercept in [True, False]
     ]
 )
+# The fits with covariates checked against lme4, as (IM, REML or ML): see covariate_inputs.
+COVARIATE_FITS = [("PGA", True), ("PGA", False)]
 # The criterion is also checked against lme4 at these (event, site) theta.
 CRITERION_IMS = ["PGA", "pSA_1.0"]
 CRITERION_THETAS = [(1.0, 1.0), (0.0, 0.7), (0.9, 0.0), (0.3, 2.0)]
@@ -101,9 +103,27 @@ def fit_inputs(
     return y, groups_of(df, site_term)
 
 
+def covariate_inputs(
+    df: pd.DataFrame, im: str
+) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """The response, grouping factors and covariates of a fit in COVARIATE_FITS.
+
+    The covariates are made up: one that is constant within an event, like magnitude,
+    and one that differs for every record, like distance. The response is the IM's
+    residual plus a trend in both, so that their coefficients are far from zero.
+    """
+    rng = np.random.default_rng(7)
+    events, ev = np.unique(df["event_id"], return_inverse=True)
+    magnitude = rng.uniform(-1.5, 1.5, size=events.size)[ev]
+    distance = rng.normal(size=len(df))
+    y = df[im].to_numpy() + 0.3 * magnitude - 0.2 * distance
+    return y, groups_of(df, True), np.column_stack([magnitude, distance])
+
+
 @dataclass(frozen=True)
 class Lme4Fit:
-    """lme4's fit for an entry of LME4_FITS, laid out like :class:`mera.lmm.LmmFit`."""
+    """lme4's fit for an entry of LME4_FITS or COVARIATE_FITS, laid out like
+    :class:`mera.lmm.LmmFit`."""
 
     levels: list[np.ndarray]
     theta: np.ndarray
@@ -114,9 +134,14 @@ class Lme4Fit:
     condsd: list[np.ndarray]
     deviance: float
 
-    def fitted(self, groups: list[np.ndarray]) -> np.ndarray:
-        """Fitted values of observations with these grouping-factor labels."""
+    def fitted(
+        self, groups: list[np.ndarray], covariates: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Fitted values of observations with these grouping-factor labels (and these
+        covariates, for a fit that has them after its intercept)."""
         fitted = np.full(len(groups[0]), self.beta[0] if self.beta.size else 0.0)
+        if covariates is not None:
+            fitted = fitted + covariates @ self.beta[1:]
         for levels, ranef, labels in zip(self.levels, self.ranef, groups):
             fitted = fitted + ranef[np.searchsorted(levels, labels.astype(str))]
         return fitted
@@ -137,6 +162,30 @@ def load_lme4_fits() -> dict[tuple[str, bool, bool], Lme4Fit]:
             sigma=float(row["sigma"]),
             beta=np.array([row["beta"]] if key[1] else []),
             beta_se=np.array([row["beta_se"]] if key[1] else []),
+            ranef=[g["ranef"].to_numpy() for g in factors],
+            condsd=[g["condsd"].to_numpy() for g in factors],
+            deviance=float(row["deviance"]),
+        )
+    return out
+
+
+def load_lme4_covariate_fits() -> dict[tuple[str, bool], Lme4Fit]:
+    """lme4's fits for COVARIATE_FITS, keyed like it, from LME4_REFERENCE."""
+    effects = pd.read_csv(LME4_REFERENCE / "covariate_random_effects.csv").groupby(
+        ["im", "reml"]
+    )
+    out = {}
+    fits = pd.read_csv(LME4_REFERENCE / "covariate_fits.csv")
+    for row in fits.to_dict("records"):
+        key = (str(row["im"]), bool(row["reml"]))
+        factors = [g for _, g in effects.get_group(key).groupby("factor", sort=False)]
+        out[key] = Lme4Fit(
+            levels=[g["level"].to_numpy(dtype=str) for g in factors],
+            theta=np.array([row["theta_event"], row["theta_site"]]),
+            sigma=float(row["sigma"]),
+            # the intercept, then the covariates in the order of their columns
+            beta=np.array([row[c] for c in fits.columns if c.startswith("beta_")]),
+            beta_se=np.array([row[c] for c in fits.columns if c.startswith("se_")]),
             ranef=[g["ranef"].to_numpy() for g in factors],
             condsd=[g["condsd"].to_numpy() for g in factors],
             deviance=float(row["deviance"]),

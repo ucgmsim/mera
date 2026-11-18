@@ -1,13 +1,26 @@
 import numpy as np
 import pandas as pd
 import pytest
-from example_data import LME4_FITS, Lme4Fit, fit_inputs, groups_of, synthetic
+from example_data import (
+    COVARIATE_FITS,
+    LME4_FITS,
+    Lme4Fit,
+    covariate_inputs,
+    fit_inputs,
+    groups_of,
+    synthetic,
+)
 
 from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import LmmFit, fit_lmm
 
 
-def assert_same_fit(fit: LmmFit, expected: Lme4Fit, groups: list[np.ndarray]) -> None:
+def assert_same_fit(
+    fit: LmmFit,
+    expected: Lme4Fit,
+    groups: list[np.ndarray],
+    covariates: np.ndarray | None = None,
+) -> None:
     # The same optimum: never worse than lme4's, and equal to optimiser precision.
     assert fit.deviance <= expected.deviance + 1e-8
     assert fit.deviance == pytest.approx(expected.deviance, abs=1e-6)
@@ -22,7 +35,9 @@ def assert_same_fit(fit: LmmFit, expected: Lme4Fit, groups: list[np.ndarray]) ->
         np.testing.assert_allclose(got, want, atol=1e-5)
     for got, want in zip(fit.condsd, expected.condsd):
         np.testing.assert_allclose(got, want, atol=1e-6)
-    np.testing.assert_allclose(fit.fitted, expected.fitted(groups), atol=1e-5)
+    np.testing.assert_allclose(
+        fit.fitted, expected.fitted(groups, covariates), atol=1e-5
+    )
 
 
 @pytest.mark.parametrize("data, intercept, site_term", LME4_FITS)
@@ -218,6 +233,22 @@ def test_errors_note_what_was_being_fitted() -> None:
         assert error.value.__notes__ == ["while fitting IM PGA"]
 
 
+@pytest.mark.parametrize("im, reml", COVARIATE_FITS)
+def test_covariates_match_lme4(
+    example_residuals: pd.DataFrame,
+    lme4_covariate_fits: dict[tuple[str, bool], Lme4Fit],
+    im: str,
+    reml: bool,
+) -> None:
+    """Fixed effects beside the bias, by REML and by maximum likelihood: lme4's
+    ``y ~ 1 + magnitude + distance + (1|event) + (1|site)``."""
+    y, groups, covariates = covariate_inputs(example_residuals, im)
+    fit = fit_lmm(y, groups, reml=reml, covariates=covariates)
+    assert fit.converged
+    assert fit.beta.shape == (3,)
+    assert_same_fit(fit, lme4_covariate_fits[im, reml], groups, covariates)
+
+
 def covariate_data() -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
     """A response with a trend in two covariates, its groups (events, sites) and the
     covariates: one that is constant within an event, like magnitude, and one that
@@ -323,6 +354,9 @@ def test_rejects_invalid_covariates() -> None:
     indicators = np.column_stack([classes == k for k in range(3)])
     with pytest.raises(ValueError, match="collinear"):
         fit_lmm(y, groups, covariates=indicators)
+    # a covariate that is zero for every record
+    with pytest.raises(ValueError, match="collinear"):
+        fit_lmm(y, groups, covariates=np.zeros(y.size))
     # without the intercept, the same indicators are a valid model
     assert fit_lmm(y, groups, covariates=indicators, intercept=False).beta.shape == (3,)
 
@@ -367,3 +401,19 @@ def test_rejects_invalid_start() -> None:
     for bad in [-0.5, np.nan, np.inf]:
         with pytest.raises(ValueError, match="finite and not negative"):
             fit_lmm(y, groups, start=[1.0, bad])
+
+
+def test_the_units_of_a_covariate_do_not_matter() -> None:
+    """Measuring a covariate in other units, however small or large, must rescale its
+    coefficient and change nothing else: it must not make the model look collinear."""
+    y, groups, covariates = covariate_data()
+    base = fit_lmm(y, groups, covariates=covariates)
+    for scale in [1e-15, 1e15]:
+        scaled = fit_lmm(y, groups, covariates=covariates * [scale, 1.0])
+        np.testing.assert_allclose(
+            scaled.beta * [1.0, scale, 1.0], base.beta, rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            scaled.beta_se * [1.0, scale, 1.0], base.beta_se, rtol=1e-6
+        )
+        np.testing.assert_allclose(scaled.theta, base.theta, atol=1e-6)

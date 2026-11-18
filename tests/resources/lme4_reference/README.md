@@ -6,6 +6,7 @@ Values from R's lme4 that the tests compare mera against.
 |---|---|---|
 | `no_mask/`, `mask/` | `run_mera`'s outputs for all 118 IMs of the example data (bias, standard deviations, random effects and their conditional SDs, fitted values and remaining residuals), without and with the reference mask | `test_mera.py::test_mera`, `test_mera_in_parallel` |
 | `fits.csv`, `random_effects.csv` | lme4's fits for `LME4_FITS` in `tests/example_data.py`: the REML criterion, theta, sigma and the intercept with its standard error; per level, the random effect and its conditional SD | `test_lmm.py::test_matches_lme4`, `test_mera.py::test_other_configurations_match_lme4` |
+| `covariate_fits.csv`, `covariate_random_effects.csv` | lme4's fits for `COVARIATE_FITS` in `tests/example_data.py`, which have two covariates beside the intercept, by REML and by maximum likelihood: the same quantities, with a coefficient and a standard error per fixed effect | `test_lmm.py::test_covariates_match_lme4` |
 | `criterion.csv` | lme4's REML criterion at the fixed `CRITERION_THETAS` for `CRITERION_IMS`, in all four configurations | `test_criterion.py::test_rust_deviance_matches_lme4` |
 
 ## How they were made
@@ -32,6 +33,12 @@ with its standard error, and 2e-7 in the random effects, conditional SDs, fitted
 and remaining residuals. Where mera reports a singular fit (theta exactly 0), lme4
 stops within 3e-7 of 0 and sometimes exactly on it.
 
+The two covariate files were added on 2026-11-18, by
+`tools/lme4_reference/generate.py covariate_fits`, with lme4 2.1-0 and otherwise the
+versions above; the other files were not rewritten. They agreed with mera to within
+4e-11 in the criterion, 2e-7 in theta, the random effects and the fitted values, and
+3e-9 in sigma, the fixed effects and their standard errors.
+
 ## Regenerating
 
 This needs R with lme4 and lmerTest, and a Python environment with this repository's
@@ -48,4 +55,6 @@ R_LIBS=~/R/lme4 /tmp/lme4-env/bin/python tools/lme4_reference/generate.py
 ```
 
 It takes about two minutes and rewrites every file here except this README; update the
-versions, date and agreement above to match.
+versions, date and agreement above to match. To rewrite only some of the files, name
+their groups after the script (`run_mera`, `fits`, `covariate_fits`, `criterion`): adding
+a reference then leaves the others, and their history in git, untouched.

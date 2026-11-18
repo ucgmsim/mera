@@ -255,6 +255,10 @@ def find_theta(model: Model) -> np.ndarray:
     n_factors = model.level_factor.max() + 1
     # As in mera.lmm.fit_lmm, the optimiser searches over omega = log(1 + theta^2) for
     # each factor, starting from theta = 1 and never going below theta = 0.
+    #
+    # COBYQA only compares values of the criterion. fit_lmm also uses the slope of the
+    # criterion, which the Rust engine computes, and arrives at the same theta in about
+    # a fifth of the evaluations. This search is the one it keeps in reserve.
     result = minimize(
         lambda omega: evaluate(_theta_from(omega), model).deviance,
         np.full(n_factors, np.log(2.0)),

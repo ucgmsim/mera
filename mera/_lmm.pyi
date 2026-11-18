@@ -8,8 +8,9 @@ readers. :func:`mera.lmm.fit_lmm` is the only code in mera that uses it.
 Typical use::
 
     model = CrossedModel(codes, n_levels, y, x)   # once per fit
-    model.deviance([0.8, 1.2])             # the criterion at a trial theta, many times
-    model.deviance_and_gradient([0.8, 1.2])  # the same, with its slope in each theta^2
+    model.deviance_and_gradient([0.8, 1.2])  # the criterion at a trial theta and its
+                                             # slope in each theta^2, about ten times
+    model.deviance([0.8, 1.2])             # the criterion alone, for a search without it
     estimates = model.fit_at(best_theta)   # everything else, once
 """
 

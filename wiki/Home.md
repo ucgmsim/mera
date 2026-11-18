@@ -49,8 +49,14 @@ likelihood (REML) method of the R package [lme4](https://github.com/lme4/lme4)
 - **Numerical core.** It is written in Rust, using the [faer](https://crates.io/crates/faer)
   sparse Cholesky factorisation, and is called from Python. R, lme4 and rpy2 are no longer
   needed.
-- **Optimiser.** As in lme4, the ratios of the random-effect standard deviations to the
-  residual standard deviation are optimised with a derivative-free trust-region method.
+- **Optimiser.** As in lme4, the criterion is minimised over the ratios of the
+  random-effect standard deviations to the residual standard deviation. lme4 does this
+  with a derivative-free trust-region method. MERA uses the gradient of the criterion,
+  which its numerical core computes exactly: a quasi-Newton search (L-BFGS-B), then
+  Newton's method to confirm the optimum, with a derivative-free trust-region method
+  (COBYQA) kept as a fallback. A fit takes about ten evaluations of the criterion and
+  its gradient, where lme4's default search takes 30 to 40 of the criterion on the
+  example data.
 - **Validation.** It was validated against lme4 2.0.6. The variance components, bias,
   random effects (BLUPs, or conditional modes) and their conditional standard deviations
   agree to within lme4's own convergence tolerance. MERA's REML optimum was at least as

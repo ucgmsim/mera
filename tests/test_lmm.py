@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,7 +16,7 @@ from example_data import (
 )
 
 from mera.example import maths_walkthrough as walkthrough
-from mera.lmm import _encode_labels, fit_lmm
+from mera.lmm import _encode_labels, _search, fit_lmm
 
 
 @pytest.mark.parametrize("data, intercept, site_term", LME4_FITS)
@@ -51,8 +53,8 @@ def test_singular_fit_reports_exact_zero(
 def test_doubly_singular_fit_reports_exact_zeros(
     example_residuals: pd.DataFrame,
 ) -> None:
-    """Both variances are zero here, as lme4 also finds; COBYQA stops ~1e-16 (rounding)
-    above the bound in theta^2, which must not come out as theta ~ 1e-8."""
+    """Both variances are zero here, as lme4 also finds. A search can stop ~1e-16
+    (rounding) above the bound in theta^2, which must not come out as theta ~ 1e-8."""
     y = synthetic(example_residuals, "weak_effects", seed=138)
     fit = fit_lmm(y, groups_of(example_residuals, True))
     np.testing.assert_array_equal(fit.theta, 0.0)
@@ -309,9 +311,9 @@ def test_rejects_invalid_covariates() -> None:
 def test_a_start_near_the_optimum_saves_evaluations(
     example_residuals: pd.DataFrame,
 ) -> None:
-    """A search that starts from the theta of an earlier fit ends at the same optimum,
-    in fewer evaluations (33 against 57 here). Refits of similar data, as in a
-    bootstrap, are the use: there the saving is smaller, about 15%."""
+    """A search that starts from the theta of an earlier fit of the same data ends at
+    the same optimum, in fewer evaluations (5 against 9 here). A start that is only
+    near the optimum, as for refits of similar data, saves none: see fit_lmm's notes."""
     y, groups = fit_inputs(example_residuals, "PGA", True)
     cold = fit_lmm(y, groups)
     warm = fit_lmm(y, groups, start=cold.theta)
@@ -506,3 +508,74 @@ def test_beta_cov_is_the_covariance_of_the_fixed_effects() -> None:
         np.sqrt(difference @ expected @ difference), rel=1e-7
     )
     assert fit_lmm(y, groups, intercept=False).beta_cov.shape == (0, 0)
+
+
+def test_the_search_uses_the_gradient_and_needs_few_evaluations(
+    example_residuals: pd.DataFrame,
+    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
+) -> None:
+    """The search follows the slope of the criterion, which takes far fewer
+    evaluations than a search that only compares values of it (9 against about 50
+    here)."""
+    y, groups = fit_inputs(example_residuals, "PGA", True)
+    fit = fit_lmm(y, groups)
+    assert fit.converged
+    assert fit.n_evals <= 15
+    assert_matches_lme4(fit, lme4_fits["PGA", True, True], groups)
+
+
+@pytest.mark.parametrize(
+    ("data", "setting", "value"),
+    [
+        ("PGA", "NEWTON_MAX_STEPS", 0),
+        ("no_event_effect", "NEWTON_MAX_STEPS", 0),
+        ("PGA", "NEWTON_MAX_JUMP", 0.0),
+    ],
+)
+def test_the_search_without_derivatives_finishes_what_the_gradient_search_cannot(
+    example_residuals: pd.DataFrame,
+    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
+    monkeypatch: pytest.MonkeyPatch,
+    data: str,
+    setting: str,
+    value: float,
+) -> None:
+    """If the gradient search cannot confirm that it has arrived, the search that only
+    compares values of the criterion takes over from where it stopped. Here that is
+    forced, by allowing the confirmation no steps, or no jump of any length."""
+    y, groups = fit_inputs(example_residuals, data, True)
+    usual = fit_lmm(y, groups)
+    monkeypatch.setattr(f"mera.lmm.{setting}", value)
+    fallback = fit_lmm(y, groups)
+    assert fallback.converged
+    assert fallback.n_evals > usual.n_evals
+    assert_matches_lme4(fallback, lme4_fits[data, True, True], groups)
+    # where the fit is singular, both report exactly zero
+    np.testing.assert_array_equal(fallback.theta == 0.0, usual.theta == 0.0)
+
+
+def test_the_search_does_not_jump_where_the_criterion_does_not_curve_upwards() -> None:
+    """Newton's method finds where the slope is zero, which is a minimum only if the
+    criterion curves upwards there. A criterion that is the same everywhere does not:
+    the jump is not calculated, and the search without the slope takes over."""
+
+    class Flat:
+        """Stands in for the engine's model, with a criterion that never changes."""
+
+        def __init__(self) -> None:
+            self.calls_without_slope = 0
+
+        def deviance_and_gradient(self, theta: list[float]) -> tuple[float, np.ndarray]:
+            return 1.0, np.zeros(len(theta))
+
+        def deviance(self, theta: list[float]) -> float:
+            self.calls_without_slope += 1
+            return 1.0
+
+    model = Flat()
+    start = np.full(2, np.log(2.0))
+    omega, n_evals, failure = _search(cast("Any", model), start, 10.0, [30, 12])
+    assert failure is None
+    assert model.calls_without_slope > 0
+    assert n_evals > model.calls_without_slope
+    np.testing.assert_allclose(omega, start, atol=0.2)

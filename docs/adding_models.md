@@ -38,7 +38,7 @@ each event".
 | a trend with magnitude, distance, Vs30, ..., or an offset per site class | [1.4](#14-a-trend-with-a-covariate) | an argument of `fit_lmm` |
 | maximum likelihood instead of REML | [1.5](#15-maximum-likelihood-and-comparing-models) | an argument of `fit_lmm` |
 | a separate standard deviation for each class of site (or of event) | [1.6](#16-a-separate-standard-deviation-per-class) | a call to `fit_lmm` |
-| the same model many times, as in a bootstrap | [1.7](#17-many-similar-fits) | an argument of `fit_lmm` |
+| the same model many times, as in a bootstrap | [1.7](#17-many-similar-fits) | calls to `fit_lmm` from several threads |
 | an extra grouping reported in `run_mera`'s tables | [2.1](#21-report-another-grouping-factor-from-run_mera) | Python edits |
 | covariates in `run_mera`, for every IM | [2.2](#22-covariates-in-run_mera) | Python edits |
 | terms that vary with a covariate, unequal residual scatter, ... | [3](#3-what-would-need-the-rust-engine-changed) | Rust changes, or other software |
@@ -263,18 +263,31 @@ Things to keep in mind:
 
 ### 1.7 Many similar fits
 
-A bootstrap refits resampled versions of one dataset, hundreds of times. Each fit searches
-for its `theta` from scratch unless it is told where to start. The `theta` of the fit of
-the full data is a good place:
+A bootstrap refits resampled versions of one dataset, hundreds of times. The fits do not
+depend on each other, so they can run at the same time, one on each processor core.
+Threads are enough for that, because the engine releases Python's global interpreter lock
+while it calculates:
 
 ```python
-full = fit_lmm(y, [events, sites])
-for rows in resamples:  # arrays of row numbers
-    fit = fit_lmm(y[rows], [events[rows], sites[rows]], start=full.theta)
+from concurrent.futures import ThreadPoolExecutor
+
+
+def refit(rows):  # an array of row numbers
+    return fit_lmm(y[rows], [events[rows], sites[rows]])
+
+
+with ThreadPoolExecutor(max_workers=4) as pool:
+    fits = list(pool.map(refit, resamples))
 ```
 
-The results are the same as without `start`, to the precision of the search, in fewer
-evaluations of the criterion (`fit.n_evals`).
+With four threads, 200 refits of the 5,218 records of the example data took 0.7 seconds
+instead of 2.1.
+
+`fit_lmm` also takes a `start`: the `theta` from which the search sets out. Starting each
+refit from the `theta` of the fit of the full data does not make it quicker, because the
+search needs about ten evaluations of the criterion (`fit.n_evals`) wherever it starts.
+What `start` is good for is checking a fit: a search from somewhere else should end at
+the same `theta`.
 
 ## 2. With small changes to the Python
 

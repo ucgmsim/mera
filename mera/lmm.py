@@ -24,8 +24,10 @@ Software* 67(1)), and has four steps:
    criterion for any ``theta``. ``theta`` has one value per grouping factor: the standard
    deviation of that factor's terms divided by the standard deviation of the residual.
    The criterion measures how well a ``theta`` fits the data, smaller being better.
-3. Search for the ``theta`` with the smallest criterion, using scipy's derivative-free
-   optimiser COBYQA (lme4 uses the similar BOBYQA).
+3. Search for the ``theta`` with the smallest criterion. The engine also returns the
+   slope of the criterion (its gradient), which tells the search which way is downhill,
+   so that it needs about ten evaluations. (lme4 searches without the slope, with the
+   optimiser BOBYQA, and takes 30 to 40 on the example data.)
 4. Ask the engine for all the estimates at that ``theta``.
 
 Where to read more:
@@ -49,11 +51,33 @@ from scipy.optimize import minimize
 
 from mera import _lmm
 
-# COBYQA shortens its steps as it closes in on the optimum, and stops once they are
-# shorter than this: it is the precision to which the optimiser's variables are found.
+# The settings of the search for theta, which _search carries out in up to three stages.
+# The lengths are in the optimiser's variable omega = log(1 + theta^2), in which a small
+# step is the same relative change of 1 + theta^2 anywhere.
+#
+# Stage 1 follows the slope of the criterion downhill (scipy's L-BFGS-B). It stops when
+# a step lowers the criterion by less than this fraction of its value. By then it is
+# close enough for stage 2 to finish. A much smaller fraction would keep it going until
+# its steps changed the criterion by less than the rounding of the arithmetic, where it
+# cannot tell downhill from uphill and wastes evaluations finding that out.
+GRADIENT_SEARCH_FTOL = 1e-9
+# Stage 2 finishes the search with Newton's method, which jumps to where the slope would
+# be zero if it kept changing at its present rate. It measures that rate by shifting
+# each omega by NEWTON_DIFFERENCE. The search has arrived when the jump is shorter than
+# NEWTON_DONE. A jump longer than NEWTON_MAX_JUMP, or no arrival within NEWTON_MAX_STEPS
+# jumps, means that stage 1 stopped too far from the optimum for this to work.
+NEWTON_DIFFERENCE = 1e-5
+NEWTON_DONE = 1e-6
+NEWTON_MAX_JUMP = 0.1
+NEWTON_MAX_STEPS = 3
+# Stage 3 is used only if stage 2 cannot confirm the optimum: a search that compares
+# values of the criterion and needs no slope (scipy's COBYQA), from where the others
+# stopped. It starts with steps of FALLBACK_TR_RADIUS, shortens them as it closes in,
+# and stops once they are shorter than FINAL_TR_RADIUS.
+FALLBACK_TR_RADIUS = 0.1
 FINAL_TR_RADIUS = 1e-8
-# COBYQA gives up, and fit_lmm warns, after this many evaluations of the criterion. A fit
-# normally takes 20 to 100.
+# The search gives up, and fit_lmm warns, after this many evaluations of the criterion.
+# A fit normally takes about 10.
 MAX_EVALUATIONS = 1000
 # The largest theta that the search considers: a random-effect standard deviation ten
 # thousand times that of the residuals. A search that ends there is refused, because it
@@ -63,11 +87,6 @@ MAX_EVALUATIONS = 1000
 # the limit the criterion has already lost most of its precision: see the notes of
 # fit_lmm.)
 MAX_THETA = 1e4
-# The length of COBYQA's first steps when fit_lmm is given a start, in the optimiser's
-# variables (omega, below). Its default of 1 suits a search that begins anywhere; from a
-# start that is already close, shorter steps waste fewer evaluations, and they lengthen
-# by themselves if the start turns out to be far off.
-WARM_START_TR_RADIUS = 0.1
 
 
 @dataclass(frozen=True)
@@ -180,9 +199,9 @@ def fit_lmm(
         of Vs30) and a row per observation, or a single covariate as a vector. Each gets
         a coefficient in ``beta``, after the intercept.
     start : array-like, optional
-        Where the search for ``theta`` starts: one value per grouping factor, for
-        example the ``theta`` of an earlier fit of similar data. The default is 1 for
-        every factor, as in lme4.
+        Where the search for ``theta`` starts: one value per grouping factor. The
+        default is 1 for every factor, as in lme4. See the notes for what it is good
+        for.
 
     Returns
     -------
@@ -229,16 +248,24 @@ def fit_lmm(
     keeps the fit accurate however large the mean of ``y`` or of a covariate is compared
     with its spread, and however alike two covariates are.
 
-    The result does not depend on ``start``, to the precision of the search, but the
-    number of evaluations does. When many similar datasets are fitted, as in a bootstrap,
-    starting each from the ``theta`` of the fit of the full data saves evaluations:
-    about 15% of them on the example data.
+    The search follows the slope of the criterion downhill, then confirms that it has
+    arrived by Newton's method (see ``_search``). It needs about ten evaluations of the
+    criterion, each with its slope, which costs two to three times as much as the
+    criterion alone.
+
+    The result does not depend on ``start``, to the precision of the search, and the
+    number of evaluations depends on it only a little. From the ``theta`` of a fit of
+    similar data, as in a bootstrap, the search takes as many evaluations as from the
+    default, because most of them go on learning how the criterion curves, wherever it
+    starts. Only a start at the optimum itself saves some (five evaluations against nine
+    on the example data). A second fit from a different ``start`` is a way of checking
+    the first: both should end at the same ``theta``.
 
     Fits can run in several threads at once (with
     ``concurrent.futures.ThreadPoolExecutor``, for example), because the engine releases
     Python's global interpreter lock while it calculates. With four threads, four fits
-    of 150,000 records took a third of the time they take one after another. Small fits
-    gain less, because the search itself (scipy's COBYQA) is Python code.
+    of 150,000 records took about a third of the time they take one after another, and
+    so did 200 fits of 5,000 records. ``docs/adding_models.md`` has an example.
 
     Subtracting a typical value from a covariate (magnitude less 6, say) makes the
     intercept the mean at that value rather than at zero, and changes nothing else.
@@ -396,23 +423,21 @@ def fit_lmm(
         n_factors = len(codes)
 
         # ---- 3. Search for the theta with the smallest criterion ----
-        # COBYQA does not search over theta itself, but over omega = log(1 + theta^2)
-        # for each factor, for two reasons (section 7 of docs/mixed_effects_maths.md).
+        # The search is not over theta itself, but over omega = log(1 + theta^2) for
+        # each factor, for two reasons (section 7 of docs/mixed_effects_maths.md).
         #
         # Near zero, omega is theta^2. The criterion depends on theta only through
         # theta^2, so plotted against theta it is always flat (its slope is zero) at
-        # theta_k = 0. COBYQA can stop on that flat spot even when the criterion is
-        # lower at a small positive theta_k. Plotted against theta^2 there is no flat
-        # spot: if the best value is zero, the criterion rises from there, and COBYQA,
-        # which never steps outside its bounds, stops on the bound (a singular fit,
-        # theta_k = 0, as in lme4).
+        # theta_k = 0, and a search can stop on that flat spot even when the criterion
+        # is lower at a small positive theta_k. Plotted against theta^2 there is no flat
+        # spot: if the best value is zero, the criterion rises from there, and the
+        # search, which never steps outside its bounds, stops on the bound (a singular
+        # fit, theta_k = 0, as in lme4).
         #
-        # For large theta, omega is 2 log(theta). COBYQA takes steps of one length in
-        # every variable, which works if a step changes the criterion by a similar
-        # amount wherever it is taken. That holds for log(theta). Against theta^2 the
-        # criterion becomes so flat that, from theta of about 50, COBYQA stopped short of
-        # the optimum and still reported convergence.
-        options = {"final_tr_radius": FINAL_TR_RADIUS, "maxfev": MAX_EVALUATIONS}
+        # For large theta, omega is 2 log(theta). A search works best if a step of one
+        # length changes the criterion by a similar amount wherever it is taken. That
+        # holds for log(theta). Against theta^2 the criterion becomes so flat that, from
+        # theta of about 50, a search stopped short of the optimum.
         omega_max = float(np.log1p(MAX_THETA**2))  # the limit on theta, as an omega
         if start is None:
             omega_start = np.full(n_factors, np.log(2.0))  # theta = 1, as lme4 starts
@@ -430,17 +455,10 @@ def fit_lmm(
                     f"got {theta_start}"
                 )
             omega_start = np.log1p(theta_start**2)
-            options["initial_tr_radius"] = WARM_START_TR_RADIUS
-        result = minimize(
-            lambda omega: model.deviance(_theta_from(omega).tolist()),
-            omega_start,
-            method="COBYQA",
-            bounds=[(0.0, omega_max)] * n_factors,  # 0 <= theta <= MAX_THETA
-            options=options,
-        )
+        omega, n_evals, failure = _search(model, omega_start, omega_max, n_levels)
         # A search that ends at the upper limit was stopped on its way up: see MAX_THETA.
         # (It ends within rounding of the limit, hence the small allowance.)
-        at_limit = result.x >= omega_max - 1e-4
+        at_limit = omega >= omega_max - 1e-4
         if np.any(at_limit):
             raise ValueError(
                 f"theta reached its limit of {MAX_THETA:g} for grouping factor "
@@ -449,15 +467,13 @@ def fit_lmm(
                 "too little residual variation to fit the model (synthetic data made "
                 "without noise does this)"
             )
-        # COBYQA only reaches the bound up to its own rounding (~1e-16), which the square
-        # root would turn into theta ~ 1e-8. Below the final trust-region radius, omega
-        # is zero within the optimiser's resolution (and the criterion is linear in
-        # omega there).
-        theta = _theta_from(np.where(result.x < FINAL_TR_RADIUS, 0.0, result.x))
-        if not result.success:
+        # An omega below the resolution of the search is zero: a theta below 1e-4 is not
+        # told apart from none (lme4 draws the same line for a singular fit).
+        theta = _theta_from(np.where(omega < FINAL_TR_RADIUS, 0.0, omega))
+        if failure is not None:
             subject = f" for {name}" if name is not None else ""
             warnings.warn(
-                f"The mixed-effects optimiser did not converge{subject}: {result.message}",
+                f"The mixed-effects optimiser did not converge{subject}: {failure}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -494,8 +510,8 @@ def fit_lmm(
             fitted=fitted,
             resid=y - fitted,
             deviance=float(out["deviance"]) + (log_det_change if reml else 0.0),
-            converged=bool(result.success),
-            n_evals=int(result.nfev),
+            converged=failure is None,
+            n_evals=n_evals,
         )
 
 
@@ -615,6 +631,192 @@ def _encode_labels(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     codes = np.full(labels.size, -1, dtype=np.int64)
     codes[present] = codes_present
     return levels, codes
+
+
+def _search(
+    model: _lmm.CrossedModel,
+    omega_start: np.ndarray,
+    omega_max: float,
+    n_levels: Sequence[int],
+) -> tuple[np.ndarray, int, str | None]:
+    """Searches for the omega with the smallest criterion.
+
+    The search has up to three stages, whose settings are at the top of this file.
+    The first follows the slope of the criterion downhill, and gets close to the
+    optimum in few evaluations. The second jumps to the optimum by Newton's method,
+    which also tells whether the first had arrived. Where it cannot confirm that, which
+    is rare, a slower search that needs no slope finishes the work.
+
+    Parameters
+    ----------
+    model : _lmm.CrossedModel
+        The engine's model, which evaluates the criterion and its gradient.
+    omega_start : np.ndarray
+        Where to start: ``log(1 + theta^2)`` for each grouping factor.
+    omega_max : float
+        The upper limit of every omega. The lower limit is 0, where theta is 0.
+    n_levels : sequence of int
+        The number of levels of each grouping factor, which sets how sharply the
+        criterion curves in each omega.
+
+    Returns
+    -------
+    omega : np.ndarray
+        The best omega found.
+    n_evals : int
+        The number of evaluations of the criterion, with or without its gradient.
+    failure : str or None
+        Why the search stopped without converging, None if it converged.
+    """
+    n_evals = 0
+    bounds = [(0.0, omega_max)] * omega_start.size
+    # the latest omega at which the gradient was evaluated, and that gradient
+    latest: tuple[np.ndarray, np.ndarray] | None = None
+
+    def value_and_gradient(omega: np.ndarray) -> tuple[float, np.ndarray]:
+        """The criterion at omega and its slope in each omega.
+
+        Parameters
+        ----------
+        omega : np.ndarray
+            ``log(1 + theta^2)`` for each grouping factor.
+
+        Returns
+        -------
+        value : float
+            The criterion.
+        gradient : np.ndarray
+            Its derivative with respect to each omega.
+        """
+        nonlocal n_evals, latest
+        n_evals += 1
+        value, gradient = model.deviance_and_gradient(_theta_from(omega).tolist())
+        # The engine's gradient is with respect to theta^2 = exp(omega) - 1, which
+        # changes exp(omega) times as fast as omega.
+        gradient = np.exp(omega) * gradient
+        latest = (omega.copy(), gradient)
+        return value, gradient
+
+    # How much each omega is stretched for stage 1: see there.
+    stretch = np.sqrt(np.asarray(n_levels, dtype=float))
+
+    def stretched(v: np.ndarray) -> tuple[float, np.ndarray]:
+        """The criterion and its slope, in the stretched variables of stage 1.
+
+        Parameters
+        ----------
+        v : np.ndarray
+            ``omega * stretch`` for each grouping factor.
+
+        Returns
+        -------
+        value : float
+            The criterion.
+        gradient : np.ndarray
+            Its derivative with respect to each stretched variable.
+        """
+        value, gradient = value_and_gradient(v / stretch)
+        return value, gradient / stretch
+
+    def value(omega: np.ndarray) -> float:
+        """The criterion at omega.
+
+        Parameters
+        ----------
+        omega : np.ndarray
+            ``log(1 + theta^2)`` for each grouping factor.
+
+        Returns
+        -------
+        float
+            The criterion.
+        """
+        nonlocal n_evals
+        n_evals += 1
+        return model.deviance(_theta_from(omega).tolist())
+
+    # ---- Stage 1: downhill along the slope ----
+    # L-BFGS-B starts by assuming that the criterion curves equally in every variable,
+    # and learns the real curvatures as it goes. The criterion curves in the omega of a
+    # factor roughly in proportion to the number of its levels (each level adds its own
+    # bit of information about the factor's standard deviation), so in omega itself the
+    # curvatures can differ a thousandfold between events and sites. Stretching each
+    # omega by the square root of its number of levels makes them alike from the start,
+    # which saves the evaluations it would spend finding out.
+    result = minimize(
+        stretched,
+        omega_start * stretch,
+        jac=True,  # the function returns the gradient as well as the value
+        method="L-BFGS-B",
+        bounds=[(0.0, omega_max * factor) for factor in stretch],
+        # gtol is a second stopping rule, on the size of the slope. It is set too small
+        # to act, because the slope has no natural scale: it grows with the data.
+        options={
+            "ftol": GRADIENT_SEARCH_FTOL,
+            "gtol": 1e-10,
+            "maxfun": MAX_EVALUATIONS,
+        },
+    )
+    # (clip: dividing by the stretch can leave an omega one rounding step past a bound)
+    omega = np.clip(result.x / stretch, 0.0, omega_max)
+    if n_evals >= MAX_EVALUATIONS:
+        return omega, n_evals, "the maximum number of evaluations was reached"
+
+    # ---- Stage 2: Newton's method ----
+    for _ in range(NEWTON_MAX_STEPS):
+        # The gradient at omega is usually the latest that was evaluated.
+        if latest is not None and np.array_equal(latest[0], omega):
+            gradient = latest[1]
+        else:
+            _, gradient = value_and_gradient(omega)
+        # An omega on a bound stays there if the criterion rises away from the bound.
+        # That is the case of a singular fit: omega = 0 with a positive slope.
+        held = ((omega <= 0.0) & (gradient > 0.0)) | (
+            (omega >= omega_max) & (gradient < 0.0)
+        )
+        free = np.flatnonzero(~held)
+        if free.size == 0:
+            return omega, n_evals, None
+        # The Hessian: how fast each slope changes with each of the free omegas, from
+        # the change of the gradient when one omega is shifted a little.
+        hessian = np.empty((free.size, free.size))
+        for column, j in enumerate(free):
+            shifted = omega.copy()
+            shifted[j] += NEWTON_DIFFERENCE
+            hessian[:, column] = (
+                value_and_gradient(shifted)[1][free] - gradient[free]
+            ) / NEWTON_DIFFERENCE
+        hessian = (hessian + hessian.T) / 2  # it is symmetric, but for rounding
+        # At a minimum the criterion curves upwards in every direction, which makes the
+        # Hessian positive definite: the Cholesky factorisation fails if it is not.
+        try:
+            np.linalg.cholesky(hessian)
+        except np.linalg.LinAlgError:
+            break
+        # The jump that would bring every free slope to zero.
+        jump = -np.linalg.solve(hessian, gradient[free])
+        landing = omega[free] + jump
+        too_far = np.abs(jump).max() > NEWTON_MAX_JUMP
+        if too_far or np.any(landing < 0.0) or np.any(landing > omega_max):
+            break
+        omega = omega.copy()
+        omega[free] = landing
+        if np.abs(jump).max() <= NEWTON_DONE:
+            return omega, n_evals, None
+
+    # ---- Stage 3: without the slope, from where the search stands ----
+    result = minimize(
+        value,
+        omega,
+        method="COBYQA",
+        bounds=bounds,
+        options={
+            "initial_tr_radius": FALLBACK_TR_RADIUS,
+            "final_tr_radius": FINAL_TR_RADIUS,
+            "maxfev": max(MAX_EVALUATIONS - n_evals, 1),
+        },
+    )
+    return result.x, n_evals, None if result.success else str(result.message)
 
 
 def _theta_from(omega: np.ndarray) -> np.ndarray:

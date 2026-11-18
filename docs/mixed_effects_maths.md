@@ -382,18 +382,41 @@ that it gives the same number as the definition in sections 4 and 5.
 ## 7. Searching for the best θ
 
 d(θ) has no formula for its minimum, so it is found by trying values of θ in a sensible
-order. MERA uses COBYQA, an optimiser in scipy that needs only the value of the function,
-not its slope. Roughly, it works like this:
+order. Picture d as the height of a landscape in which θ is the position: the search
+walks downhill until it reaches the bottom of the valley.
 
-1. Evaluate d at a few points around the current best θ.
-2. Fit a simple curved surface (a quadratic) through those values.
-3. Step to the lowest point of that surface, but no further than a set distance, called
-   the *trust-region radius*, because the surface is only trusted near the points it was
-   fitted to.
-4. If d improved, keep the new point. Shrink the radius as progress slows.
-5. Stop when the radius falls below 10<sup>−8</sup>.
+What keeps the walk short is knowing the *slope* of d at each point it visits: how fast
+d changes as each θ changes (its *gradient*). The slope has a formula, given at the end
+of this section, and MERA's engine computes it together with d, for two to three times
+the cost of d alone. The search has up to three stages.
 
-A fit usually takes 20 to 100 evaluations of d. Three details matter.
+1. **Downhill along the slope.** Step from the starting point in the direction in which
+   d falls fastest. After each step, compare the slopes before and after it: how much
+   the slope changed over the step shows how the landscape curves, and that sets the
+   direction and the length of the next step. This is the optimiser L-BFGS-B, in scipy.
+   The stage ends when a step lowers d by less than a billionth of its value.
+2. **Newton's method, to confirm and finish.** At the bottom of the valley the slope is
+   zero. The search evaluates the slope again a short distance away, once for each
+   factor, which shows how fast the slope changes around the point it has reached. From
+   that it calculates how far away the slope would be zero. If that is less than
+   10<sup>−6</sup> (in the variable ω, defined below), the search has arrived. Otherwise
+   it jumps to that point and checks again from there.
+3. **Without the slope, if the check fails.** Rarely, stage 2 cannot confirm the
+   minimum: the jump it calculates is too long to trust, or the landscape does not curve
+   upwards in every direction, as it must at the bottom of a valley. The search then
+   continues with COBYQA, an optimiser in scipy that only compares values of d. It fits
+   a simple curved surface (a quadratic) through the values at a few points, steps to
+   the lowest point of that surface, and repeats with ever shorter steps, until they
+   are shorter than 10<sup>−8</sup>. It is slower, but it depends on nothing that the
+   other stages do.
+
+A fit usually takes about 10 evaluations of d and its slope. A search that only compares
+values takes 50 or more to pin θ down as closely. (lme4's is of that kind. With its
+default settings it stops earlier, after 30 to 40 evaluations on the example data.) The
+walkthrough script keeps to that kind of search (`find_theta`), because it is shorter to
+write down, and it arrives at the same θ.
+
+Four details matter.
 
 **The starting point** is θ = 1 for each factor, as in lme4.
 
@@ -403,7 +426,7 @@ show no more variation between events (or between sites) than the remaining resi
 would produce by chance. MERA then reports a standard deviation of zero for that factor,
 and all its terms are zero.
 
-**The search variable.** COBYQA does not search over θ itself but over
+**The search variable.** The search is not over θ itself but over
 
 ```math
 \omega = \log(1 + \theta^2)
@@ -411,13 +434,43 @@ and all its terms are zero.
 
 for each factor, which is converted back afterwards. There are two reasons:
 
-- Near zero, ω is θ². d depends on θ only through θ², which makes d flat at θ = 0, and an
-  optimiser can stop there by mistake when the true optimum is a small positive value. In
-  θ² there is no such flat spot.
+- Near zero, ω is θ². d depends on θ only through θ², which makes d flat at θ = 0: its
+  slope there is zero whether or not zero is the best value, and a search can stop there
+  by mistake when the true optimum is a small positive value. In θ² there is no such
+  flat spot.
 - For large θ, ω is 2 log θ. Whether θ is 10 or 1,000, a step of a given size in ω then
   changes d by a similar amount, so the same step sizes work across the whole range.
 
-If COBYQA runs out of evaluations before it converges, `run_mera` warns and names the IM.
+In stage 1, each ω is also multiplied by the square root of the number of levels of its
+factor. d curves more sharply in the ω of a factor with more levels, roughly in
+proportion to their number, because each level adds its own bit of information about the
+factor's standard deviation. The multiplication makes the curvatures alike, which is
+what L-BFGS-B assumes when it starts, and saves the evaluations that it would spend
+finding out otherwise.
+
+**The slope.** For factor k, the slope of d with respect to θ<sub>k</sub>² is a sum over
+the levels i of that factor:
+
+```math
+\frac{\partial d}{\partial(\theta_k^2)} \;=\; \frac{1}{\theta_k^2} \sum_{i}
+\left[\, 1 - (A^{-1})_{ii} \;-\; \mathbf{w}_i^T (X^T V^{-1} X)^{-1} \mathbf{w}_i \;-\; (n-p)\,\frac{u_i^2}{r^2} \right]
+```
+
+The three terms come from the three terms of d: log|V|, log|XᵀV<sup>−1</sup>X| and r².
+**w**<sub>i</sub> is row i of W without its first entry (the part that belongs to X), and
+u<sub>i</sub> is the term of level i on the common scale of section 8. Everything in the
+formula is at hand after the recipe of section 6, except the entries of A<sup>−1</sup>.
+Section 8 says how those are found without inverting A. (The engine computes
+1 − (A<sup>−1</sup>)<sub>ii</sub> in an equivalent form that involves no subtraction,
+which would lose digits when (A<sup>−1</sup>)<sub>ii</sub> is close to 1: see
+`CrossedModel::deviance_and_gradient` in `model.rs`.) Since θ² = e<sup>ω</sup> − 1, the
+slope with respect to ω is this one multiplied by 1 + θ<sub>k</sub>².
+
+The tests check the formula against the change of d between two nearby values of θ
+(`test_rust_gradient_matches_differences_of_the_criterion` in `tests/test_criterion.py`).
+
+If the search runs out of evaluations before it converges, `run_mera` warns and names the
+IM.
 
 ## 8. The results at the best θ
 
@@ -481,9 +534,11 @@ of A<sup>−1</sup>). With events only, this is the formula of section 2. They a
 | A for a given θ | inside `evaluate` | | `Design::fill_a` in `design.rs` |
 | Cholesky factorisation, log-determinant, solve | `np.linalg` | | `Factor` in `factor.rs` |
 | The criterion d(θ) (sections 5 and 6) | `evaluate` | `model.deviance(...)` | `CrossedModel::profile` in `model.rs` |
-| The search (section 7) | `find_theta` | `fit_lmm`, step 3 | not in Rust |
+| The slope of d(θ) (section 7) | not in the walkthrough | `model.deviance_and_gradient(...)` | `CrossedModel::deviance_and_gradient` in `model.rs` |
+| The search (section 7) | `find_theta` (without the slope) | `fit_lmm`, step 3, and `_search` | not in Rust |
 | The results (section 8) | `estimates` | `fit_lmm`, step 4 | `CrossedModel::fit_at` in `model.rs` |
 | Diagonal of A<sup>−1</sup> | `np.linalg.inv` | | `Factor::inverse_diagonal` in `factor.rs` |
+| Entries of A<sup>−1</sup> for the slope | | | `Factor::inverse_on_pattern` in `factor.rs` |
 | One fit per IM, masks, output tables | | `run_mera` in `mera/analysis.py` | |
 
 The Rust code is commented for readers who do not know Rust, and

@@ -14,7 +14,7 @@ from example_data import (
 )
 
 from mera.example import maths_walkthrough as walkthrough
-from mera.lmm import fit_lmm
+from mera.lmm import _encode_labels, fit_lmm
 
 
 @pytest.mark.parametrize("data, intercept, site_term", LME4_FITS)
@@ -408,3 +408,43 @@ def test_no_residual_variation_is_one_clear_error(noise: float, seed: int) -> No
     )
     with pytest.raises(ValueError, match="explain the response almost exactly"):
         fit_lmm(y, [events, sites])
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        np.array([3, 10, 2, 10, 3, 3]),
+        np.array(["s3", "s10", "s2", "s10", "s3", "s3"]),
+        np.array(["s3", "s10", "s2", "s10", "s3", "s3"], dtype=object),
+        pd.Series(["s3", "s10", "s2", "s10", "s3", "s3"]).to_numpy(),
+        np.array([True, False, True, True, False, True]),
+        np.array([1.5, 2.0, 1.5, 10.0, 2.0, 1.5]),
+        # 1 and 1.0 are equal numbers with different strings: two levels, "1" and "1.0"
+        np.array([1, 1.0, "1", 2, 1.0, 1], dtype=object),
+        np.array(["2026-01-02", "2025-12-31", "2026-01-02"], dtype="datetime64[D]"),
+    ],
+    ids=["int", "str", "object str", "pandas str", "bool", "float", "mixed", "date"],
+)
+def test_labels_are_encoded_as_their_sorted_strings(labels: np.ndarray) -> None:
+    """The levels are the distinct labels as strings, sorted, and the codes their
+    positions: what np.unique gives for the labels as strings, however it is found."""
+    expected_levels, expected_codes = np.unique(labels.astype(str), return_inverse=True)
+    levels, codes = _encode_labels(labels)
+    np.testing.assert_array_equal(levels, expected_levels)
+    np.testing.assert_array_equal(codes, expected_codes)
+    assert codes.dtype == np.int64
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        np.array(["a", None, "b", "a"], dtype=object),
+        np.array([1.0, np.nan, 2.0, 1.0]),
+        np.array(["a", np.nan, 3, "a"], dtype=object),
+    ],
+    ids=["str", "float", "mixed"],
+)
+def test_a_missing_label_has_no_code(labels: np.ndarray) -> None:
+    levels, codes = _encode_labels(labels)
+    assert codes[1] == -1 and np.all(np.delete(codes, 1) >= 0)
+    assert levels.size == 2

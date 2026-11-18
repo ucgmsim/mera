@@ -295,7 +295,8 @@ for `site` finds every place:
    list selects the id columns that each fit receives, and that are attached to
    `rem_res_df`.
 3. **The `tasks` tuple** in `run_mera` and **the arguments of `_run_im_mera`**. Pass the
-   new column name through, as `site_cname` is.
+   new column name through, as `site_cname` is, and the ids of its levels, which
+   `run_mera` finds once for all the IMs, as `site_ids` are.
 4. **`group_columns`**, at the top of `_run_im_mera`. Append the new column here too. The
    order of this list is the order of the grouping factors, so the new factor is index 2
    of `fit.levels`, `fit.ranef`, `fit.condsd` and `fit.sd`. If the site term is switched

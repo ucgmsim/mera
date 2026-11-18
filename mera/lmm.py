@@ -280,19 +280,17 @@ def fit_lmm(
                     f"each grouping factor needs one label per observation ({y.size}), "
                     f"got shape {labels.shape}"
                 )
+            # level holds the distinct labels as strings, sorted, and code_in_factor
+            # the position of each observation's label in that list. For the labels
+            # ["b", "a", "b"], level is ["a", "b"] and code_in_factor is [1, 0, 1].
+            level, code_in_factor = _encode_labels(labels[in_factor])
             # Otherwise every missing id would become one shared level called "nan"/"None".
-            if np.any(pd.isna(labels[in_factor])):
+            if np.any(code_in_factor < 0):
                 raise ValueError(
                     f"grouping factor {k} has missing labels (NaN or None); "
                     "drop or label those observations first"
                 )
-            # np.unique sorts the distinct labels and, with return_inverse, also gives
-            # the position of each observation's label in that sorted list. For the
-            # labels ["b", "a", "b"], level is ["a", "b"] and code is [1, 0, 1]. An
-            # observation that is not in the factor keeps the code -1, "no level".
-            level, code_in_factor = np.unique(
-                labels[in_factor].astype(str), return_inverse=True
-            )
+            # An observation that is not in the factor keeps the code -1, "no level".
             code = np.full(y.size, -1, dtype=np.int64)
             code[in_factor] = code_in_factor
             # As lme4: a single level cannot be separated from the intercept / residual,
@@ -537,6 +535,51 @@ def split_by_class(
     return [
         np.ma.masked_array(labels, mask=classes != name) for name in np.unique(classes)
     ]
+
+
+def _encode_labels(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Finds the levels of a grouping factor and the code of each label.
+
+    The result is that of ``np.unique(labels.astype(str), return_inverse=True)``, found
+    faster where possible, and with missing labels set apart.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        The labels, one per observation.
+
+    Returns
+    -------
+    levels : np.ndarray
+        The distinct labels as strings, sorted.
+    codes : np.ndarray
+        For each label, the position of its string in ``levels``, as int64. A missing
+        label (NaN or None) has the code -1.
+    """
+    # Turning every label into a string and sorting them all is the slow way: for a
+    # million records it takes about a second. If equal labels always have equal
+    # strings, it is enough to find the distinct labels (pd.factorize does this with a
+    # hash table, without sorting) and to turn only those into strings and sort them.
+    # That holds for whole numbers, booleans, dates and strings. It does not hold for
+    # an array of mixed objects, where 1 and 1.0 are equal but "1" and "1.0" are not,
+    # nor for floating-point numbers, where 0.0 and -0.0 are equal.
+    is_strings = labels.dtype == object and pd.api.types.infer_dtype(labels) == "string"
+    if is_strings or labels.dtype.kind in "iubUM":
+        # first_codes numbers the distinct labels in the order they first appear (-1
+        # for a missing label), and position[j] is where the j-th of them is in levels.
+        first_codes, distinct = pd.factorize(labels)
+        levels, position = np.unique(
+            np.asarray(distinct).astype(str), return_inverse=True
+        )
+        codes = np.full(labels.size, -1, dtype=np.int64)
+        present = first_codes >= 0
+        codes[present] = position[first_codes[present]]
+        return levels, codes
+    present = ~pd.isna(labels)
+    levels, codes_present = np.unique(labels[present].astype(str), return_inverse=True)
+    codes = np.full(labels.size, -1, dtype=np.int64)
+    codes[present] = codes_present
+    return levels, codes
 
 
 def _theta_from(omega: np.ndarray) -> np.ndarray:

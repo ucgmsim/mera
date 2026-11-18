@@ -370,6 +370,12 @@ def run_mera(
     if compute_site_term:
         random_effects_columns.append(site_cname)
 
+    # The ids of all the events, and of all the sites, as strings (as fit_lmm compares
+    # them) in natural order ("event_2" before "event_10"). They label the rows of the
+    # event and site tables, and are the same for every IM, so they are found once.
+    event_ids = _natural_ids(residual_df[event_cname])
+    site_ids = _natural_ids(residual_df[site_cname]) if compute_site_term else None
+
     # One task per IM: the tuple of arguments of one call to _run_im_mera. A task
     # holds only that IM's columns of the residuals and of the mask, because in
     # parallel each task is copied to a worker process.
@@ -385,6 +391,8 @@ def run_mera(
             None if mask is None else mask[cur_im],
             raise_warnings,
             verbose,
+            event_ids,
+            site_ids,
         )
         for cur_im in ims
     )
@@ -454,6 +462,23 @@ def run_mera(
     )
 
 
+def _natural_ids(labels: pd.Series) -> list[str]:
+    """
+    The distinct ids of a column, as strings in natural order
+
+    Parameters
+    ----------
+    labels : pd.Series
+        Column of event or site ids
+
+    Returns
+    -------
+    list of str
+        The distinct ids, with "event_2" before "event_10"
+    """
+    return natsort.natsorted(np.unique(labels.to_numpy().astype(str)))
+
+
 def _run_im_mera(
     residual_df: pd.DataFrame,
     im: str,
@@ -465,6 +490,8 @@ def _run_im_mera(
     mask: pd.Series | None,
     raise_warnings: bool,
     verbose: bool,
+    event_ids: list[str],
+    site_ids: list[str] | None,
 ):
     """
     Runs the mixed-effects regression for a single IM.
@@ -496,6 +523,11 @@ def _run_im_mera(
         Whether to print warnings for events and sites with too few records
     verbose : bool
         Whether to print progress
+    event_ids : list of str
+        The ids of all the events of the table, in the order of the rows of the
+        event tables
+    site_ids : list of str or None
+        The same for the sites, None if no site term is fitted
 
     Returns
     -------
@@ -523,11 +555,7 @@ def _run_im_mera(
     # Result series
     # These start as NaN and are filled in, in place, after the fit. They are indexed
     # by every event, site or record of residual_df, not only those of this fit, so
-    # that they are the same for every IM. The ids become strings, as fit_lmm compares
-    # them, and are put in natural order ("event_2" before "event_10").
-    event_ids = natsort.natsorted(
-        np.unique(residual_df[event_cname].to_numpy().astype(str))
-    )
+    # that they are the same for every IM.
     event_res_series = pd.Series(index=event_ids, dtype=float, name=im)
     event_cond_std_series = pd.Series(index=event_ids, dtype=float, name=im)
     bias_std_series = pd.Series(
@@ -539,10 +567,7 @@ def _run_im_mera(
     rem_res_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series, site_cond_std_series = None, None
-    if site_cname is not None:
-        site_ids = natsort.natsorted(
-            np.unique(residual_df[site_cname].to_numpy().astype(str))
-        )
+    if site_ids is not None:
         site_res_series = pd.Series(index=site_ids, dtype=float, name=im)
         site_cond_std_series = pd.Series(index=site_ids, dtype=float, name=im)
 

@@ -56,6 +56,12 @@ class CrossedModel:
     ------
     ValueError
         If the inputs are inconsistent or contain NaN or infinite values.
+
+    Notes
+    -----
+    The calculations release Python's global interpreter lock (the GIL), so models that
+    are evaluated in separate threads use separate processor cores. One model cannot be
+    used by two threads at once: the second call raises a ``RuntimeError``.
     """
 
     def __init__(

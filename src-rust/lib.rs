@@ -35,9 +35,13 @@ fn to_py_err(error: LmmError) -> PyErr {
 /// `codes` holds one int64 array of level codes (0, 1, ...) per grouping factor, `y` the
 /// response and `x` the optional n x p fixed-effects matrix.
 //
-// `unsendable`: a model must be used on the thread that created it. mera fits each
-// intensity measure in one thread (or one process), so this is no restriction.
-#[pyclass(module = "mera._lmm", name = "CrossedModel", unsendable)]
+// Python runs one thread at a time, under a lock (the "GIL"). The engine's calculations
+// need nothing from Python, so each method below releases the lock around them with
+// `py.detach`: other Python threads can run meanwhile, and models that are fitted in
+// separate threads use separate processor cores. `py` is a handle to the Python
+// interpreter, which PyO3 supplies: from Python the calls are just `CrossedModel(...)`,
+// `model.deviance(theta)` and `model.fit_at(theta)`.
+#[pyclass(module = "mera._lmm", name = "CrossedModel")]
 struct PyCrossedModel {
     inner: CrossedModel,
 }
@@ -47,6 +51,7 @@ impl PyCrossedModel {
     #[new]
     #[pyo3(signature = (codes, y, x=None, *, reml=true))]
     fn new(
+        py: Python<'_>,
         codes: Vec<PyReadonlyArray1<i64>>,
         y: PyReadonlyArray1<f64>,
         x: Option<PyReadonlyArray2<f64>>,
@@ -77,22 +82,23 @@ impl PyCrossedModel {
             }
             None => (Vec::new(), 0),
         };
-        let design = Design::new(&codes, &y, &x, p).map_err(to_py_err)?;
-        let inner = CrossedModel::new(design, reml).map_err(to_py_err)?;
+        // The arrays are copied by now, so the rest needs nothing from Python.
+        let inner = py
+            .detach(|| CrossedModel::new(Design::new(&codes, &y, &x, p)?, reml))
+            .map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     /// The profiled REML criterion (ML: -2 log-likelihood) at `theta`.
-    fn deviance(&mut self, theta: Vec<f64>) -> PyResult<f64> {
-        self.inner.deviance(&theta).map_err(to_py_err)
+    fn deviance(&mut self, py: Python<'_>, theta: Vec<f64>) -> PyResult<f64> {
+        let model = &mut self.inner;
+        py.detach(|| model.deviance(&theta)).map_err(to_py_err)
     }
 
     /// Estimates, random effects and conditional SDs at `theta`.
-    //
-    // `py` is a handle to the Python interpreter, which PyO3 supplies: from Python the
-    // call is just `model.fit_at(theta)`.
     fn fit_at<'py>(&mut self, py: Python<'py>, theta: Vec<f64>) -> PyResult<Bound<'py, PyDict>> {
-        let fit = self.inner.fit_at(&theta).map_err(to_py_err)?;
+        let model = &mut self.inner;
+        let fit = py.detach(|| model.fit_at(&theta)).map_err(to_py_err)?;
         // Return a Python dict, with the lists converted to numpy arrays.
         let out = PyDict::new(py);
         out.set_item("deviance", fit.deviance)?;

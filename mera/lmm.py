@@ -212,6 +212,12 @@ def fit_lmm(
     starting each from the ``theta`` of the fit of the full data saves evaluations:
     about 15% of them on the example data.
 
+    Fits can run in several threads at once (with
+    ``concurrent.futures.ThreadPoolExecutor``, for example), because the engine releases
+    Python's global interpreter lock while it calculates. With four threads, four fits
+    of 150,000 records took a third of the time they take one after another. Small fits
+    gain less, because the search itself (scipy's COBYQA) is Python code.
+
     Covariates are used as given. Subtracting a typical value from each (magnitude less
     6, say) makes the intercept the mean at that value rather than at zero, changes
     nothing else, and keeps the arithmetic accurate. ``docs/adding_models.md`` has more

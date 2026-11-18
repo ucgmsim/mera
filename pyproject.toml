@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm", "setuptools-rust>=1.1.0"]
+# setuptools 77 is the first to read the licence fields below.
+requires = ["setuptools>=77", "setuptools-scm", "setuptools-rust>=1.1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +9,8 @@ name = "ucgmsim-mera"
 authors = [{ name = "QuakeCoRE" }]
 description = "Mixed-effects regression analysis"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dynamic = ["version"]
 dependencies = [

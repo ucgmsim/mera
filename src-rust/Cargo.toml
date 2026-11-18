@@ -3,6 +3,7 @@ name = "mera_lmm_py"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "Python bindings for mera_lmm (the mera._lmm extension module)"
 publish = false
 

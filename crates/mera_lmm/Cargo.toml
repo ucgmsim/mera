@@ -3,6 +3,7 @@ name = "mera_lmm"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "Profiled REML for linear mixed models with crossed random intercepts (mera's numerical core)"
 publish = false
 

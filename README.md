@@ -160,8 +160,8 @@ records at all is skipped with a warning, and is NaN throughout.
 - **A convergence warning** names the IM whose optimiser stopped early. Its results are
   still returned, and should be treated with caution.
 - **Data without scatter cannot be fitted.** If the events and sites explain the residuals
-  exactly, as in synthetic data made without noise, there is no remaining residual to
-  estimate `phi_w` from, and `run_mera` stops with an error that says so.
+  exactly, or almost, as in synthetic data made without noise, there is no remaining
+  residual to estimate `phi_w` from, and `run_mera` stops with an error that says so.
 
 ## Understanding the method
 

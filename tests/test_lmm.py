@@ -367,8 +367,9 @@ def test_rejects_invalid_start() -> None:
         fit_lmm(y, groups, start=[1.0])
     with pytest.raises(ValueError, match="one value of theta per grouping factor"):
         fit_lmm(y, groups, start=1.0)
-    for bad in [-0.5, np.nan, np.inf]:
-        with pytest.raises(ValueError, match="finite and not negative"):
+    # negative, not a number, or beyond the limit of the search (MAX_THETA)
+    for bad in [-0.5, np.nan, np.inf, 1e9]:
+        with pytest.raises(ValueError, match="start must be"):
             fit_lmm(y, groups, start=[1.0, bad])
 
 
@@ -408,3 +409,26 @@ def test_a_large_mean_costs_no_precision_without_an_intercept(offset: float) -> 
     for got, want in zip(shifted.ranef, base.ranef):
         np.testing.assert_allclose(got, want, atol=1e-6)
     np.testing.assert_allclose(shifted.resid, base.resid, atol=1e-6)
+
+
+@pytest.mark.parametrize("noise", [0.0, 1e-9, 1e-6])
+@pytest.mark.parametrize("seed", [0, 1, 2, 5])
+def test_no_residual_variation_is_one_clear_error(noise: float, seed: int) -> None:
+    """Data that the events and sites explain exactly, or almost, cannot be fitted:
+    nothing is left to estimate sigma from, and theta grows without end. The search
+    now stops at a limit on theta and says so. Without the limit it ran until the
+    arithmetic failed, with one of three unrelated errors depending on rounding, and
+    with a little noise it sometimes returned a fit with theta in the hundreds of
+    thousands."""
+    _, events, sites = walkthrough.make_example_data()
+    rng = np.random.default_rng(seed)
+    event_levels, event_codes = np.unique(events, return_inverse=True)
+    site_levels, site_codes = np.unique(sites, return_inverse=True)
+    y = (
+        0.2
+        + 0.5 * rng.normal(size=event_levels.size)[event_codes]
+        + 0.4 * rng.normal(size=site_levels.size)[site_codes]
+        + noise * rng.normal(size=events.size)
+    )
+    with pytest.raises(ValueError, match="explain the response almost exactly"):
+        fit_lmm(y, [events, sites])

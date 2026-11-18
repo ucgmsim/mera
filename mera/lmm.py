@@ -55,6 +55,14 @@ FINAL_TR_RADIUS = 1e-8
 # COBYQA gives up, and fit_lmm warns, after this many evaluations of the criterion. A fit
 # normally takes 20 to 100.
 MAX_EVALUATIONS = 1000
+# The largest theta that the search considers: a random-effect standard deviation ten
+# thousand times that of the residuals. A search that ends there is refused, because it
+# was still going up: the model explains the response almost exactly, as it does for
+# synthetic data made without noise. Nothing is then left to estimate the residual
+# standard deviation from, and theta would grow until the arithmetic failed. (Well below
+# the limit the criterion has already lost most of its precision: see the notes of
+# fit_lmm.)
+MAX_THETA = 1e4
 # The length of COBYQA's first steps when fit_lmm is given a start, in the optimiser's
 # variables (omega, below). Its default of 1 suits a search that begins anywhere; from a
 # start that is already close, shorter steps waste fewer evaluations, and they lengthen
@@ -180,14 +188,15 @@ def fit_lmm(
         refuses), if the fixed effects are collinear (one is an exact combination of
         the others, as a covariate and the same covariate plus a constant are when there
         is an intercept), or if ``start`` is not one finite, non-negative value per
-        grouping factor.
-    RuntimeError
-        If a matrix factorisation fails.
+        grouping factor, none above the limit of the search.
 
-        Both errors are also how a response that the model explains exactly shows up,
-        such as synthetic data made without noise. No residual is then left to estimate
-        ``sigma`` from, and ``theta`` grows until the arithmetic fails. The message says
-        so.
+        Also if the model explains the response exactly, or almost, as it does for
+        synthetic data made without noise. No residual is then left to estimate
+        ``sigma`` from, and ``theta`` grows until it meets the limit of the search
+        (``MAX_THETA``, ten thousand). The message says so.
+    RuntimeError
+        If a matrix factorisation fails in the engine. This is not expected for inputs
+        that pass the checks above.
 
     Warns
     -----
@@ -227,7 +236,8 @@ def fit_lmm(
     The criterion does lose precision when a random-effect standard deviation is
     hundreds of times larger than the residual standard deviation: at a thousand times,
     ``theta`` is good to about four digits. Ground-motion residuals are nowhere near
-    that. The same happens when the mean of ``y`` is far from zero and no fixed effect
+    that, and beyond ten thousand times a fit is refused (see Raises). The same loss of
+    precision happens when the mean of ``y`` is far from zero and no fixed effect
     can absorb it (with neither an intercept nor covariates, say), because the random
     effects then have to account for it.
 
@@ -360,6 +370,7 @@ def fit_lmm(
         # criterion becomes so flat that, from theta of about 50, COBYQA stopped short of
         # the optimum and still reported convergence.
         options = {"final_tr_radius": FINAL_TR_RADIUS, "maxfev": MAX_EVALUATIONS}
+        omega_max = float(np.log1p(MAX_THETA**2))  # the limit on theta, as an omega
         if start is None:
             omega_start = np.full(n_factors, np.log(2.0))  # theta = 1, as lme4 starts
         else:
@@ -369,9 +380,11 @@ def fit_lmm(
                     f"start needs one value of theta per grouping factor ({n_factors}), "
                     f"got shape {theta_start.shape}"
                 )
-            if not np.all(np.isfinite(theta_start) & (theta_start >= 0.0)):
+            in_range = (theta_start >= 0.0) & (theta_start <= MAX_THETA)
+            if not np.all(np.isfinite(theta_start) & in_range):
                 raise ValueError(
-                    f"start must be finite and not negative, got {theta_start}"
+                    f"start must be finite, not negative and at most {MAX_THETA:g}, "
+                    f"got {theta_start}"
                 )
             omega_start = np.log1p(theta_start**2)
             options["initial_tr_radius"] = WARM_START_TR_RADIUS
@@ -379,9 +392,20 @@ def fit_lmm(
             lambda omega: model.deviance(_theta_from(omega).tolist()),
             omega_start,
             method="COBYQA",
-            bounds=[(0.0, None)] * n_factors,  # omega >= 0, that is theta >= 0
+            bounds=[(0.0, omega_max)] * n_factors,  # 0 <= theta <= MAX_THETA
             options=options,
         )
+        # A search that ends at the upper limit was stopped on its way up: see MAX_THETA.
+        # (It ends within rounding of the limit, hence the small allowance.)
+        at_limit = result.x >= omega_max - 1e-4
+        if np.any(at_limit):
+            raise ValueError(
+                f"theta reached its limit of {MAX_THETA:g} for grouping factor "
+                f"{', '.join(map(str, np.flatnonzero(at_limit)))}: the grouping factors "
+                "and fixed effects explain the response almost exactly, which leaves "
+                "too little residual variation to fit the model (synthetic data made "
+                "without noise does this)"
+            )
         # COBYQA only reaches the bound up to its own rounding (~1e-16), which the square
         # root would turn into theta ~ 1e-8. Below the final trust-region radius, omega
         # is zero within the optimiser's resolution (and the criterion is linear in

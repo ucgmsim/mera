@@ -329,11 +329,10 @@ def run_mera(
     ------
     ValueError
         If an IM has NaN values among the records used, or if the records cannot be
-        fitted: for example if they belong to a single event, or every record belongs
-        to an event of its own. The error names the IM.
-    RuntimeError
-        If the events and sites explain an IM's residuals exactly, as in synthetic data
-        made without noise. (Some such data raise a ValueError instead.)
+        fitted: for example if they belong to a single event, if every record belongs
+        to an event of its own, or if the events and sites explain the IM's residuals
+        exactly or almost, as in synthetic data made without noise. The error names
+        the IM.
 
     Warns
     -----

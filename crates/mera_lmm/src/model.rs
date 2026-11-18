@@ -100,10 +100,15 @@
 //! lost: of the 16 or so significant digits of a floating-point number, about
 //! `log10(y'y / r2)` go. For ground-motion residuals that is about one digit. It starts
 //! to matter when the mean of the response, or a random-effect standard deviation, is
-//! hundreds of times larger than sigma: at a thousand times, theta is good to about four
-//! digits. `mera.lmm.fit_lmm` removes the first of these causes: before it calls this
-//! crate, it subtracts from the response its least-squares fit on the fixed effects (its
-//! mean, when the intercept is the only one). It also hands over the fixed effects as
+//! hundreds of times larger than sigma: at a thousand times, about six digits go. The
+//! slope of the criterion loses them too, which leaves theta good to about eight digits
+//! when the search follows the slope. (A search that only compares values of the
+//! criterion does far worse, about four digits, because near its minimum the criterion
+//! hardly changes with theta.)
+//!
+//! `mera.lmm.fit_lmm` removes the first of these causes: before it calls this crate, it
+//! subtracts from the response its least-squares fit on the fixed effects (its mean,
+//! when the intercept is the only one). It also hands over the fixed effects as
 //! orthonormal columns, so that `X'V^-1X` is well conditioned whatever their scales.
 
 use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};

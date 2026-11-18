@@ -90,9 +90,8 @@ MAX_EVALUATIONS = 1000
 # thousand times that of the residuals. A search that ends there is refused, because it
 # was still going up: the model explains the response almost exactly, as it does for
 # synthetic data made without noise. Nothing is then left to estimate the residual
-# standard deviation from, and theta would grow until the arithmetic failed. (Well below
-# the limit the criterion has already lost most of its precision: see the notes of
-# fit_lmm.)
+# standard deviation from, and theta would grow until the arithmetic failed. (Towards
+# the limit the arithmetic loses digits: see the notes of fit_lmm.)
 MAX_THETA = 1e4
 
 
@@ -279,13 +278,13 @@ def fit_lmm(
     ``docs/adding_models.md`` has more advice on covariates, and on comparing models
     with and without one.
 
-    The criterion does lose precision when a random-effect standard deviation is
+    The arithmetic does lose precision when a random-effect standard deviation is
     hundreds of times larger than the residual standard deviation: at a thousand times,
-    ``theta`` is good to about four digits. Ground-motion residuals are nowhere near
-    that, and beyond ten thousand times a fit is refused (see Raises). The same loss of
-    precision happens when the mean of ``y`` is far from zero and no fixed effect
-    can absorb it (with neither an intercept nor covariates, say), because the random
-    effects then have to account for it.
+    ``theta`` is good to about eight digits, and at three thousand times to about seven.
+    Ground-motion residuals are nowhere near that, and beyond ten thousand times a fit
+    is refused (see Raises). The same loss of precision happens when the mean of ``y``
+    is far from zero and no fixed effect can absorb it (with neither an intercept nor
+    covariates, say), because the random effects then have to account for it.
 
     Examples
     --------

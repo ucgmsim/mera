@@ -1,4 +1,4 @@
-//! Test helpers: a deterministic RNG and a tolerance check.
+//! Test helper: a deterministic random-number generator.
 //!
 //! The tests need random designs and responses. A small generator written here, rather
 //! than a random-number library, gives the same numbers on every platform and compiler
@@ -34,12 +34,4 @@ impl Lcg {
         let u2 = self.next_f64();
         (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
     }
-}
-
-/// Asserts `|a - b| <= tol * max(1, |b|)`.
-pub(crate) fn assert_close(a: f64, b: f64, tol: f64, what: &str) {
-    assert!(
-        (a - b).abs() <= tol * b.abs().max(1.0),
-        "{what}: {a} vs {b}"
-    );
 }

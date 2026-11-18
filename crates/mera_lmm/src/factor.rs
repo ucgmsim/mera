@@ -369,7 +369,8 @@ mod tests {
     // answers as faer's dense routines, in both layouts.
     use super::*;
     use crate::design::Design;
-    use crate::testing::{Lcg, assert_close};
+    use crate::testing::Lcg;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use faer::Mat;
     use faer::linalg::solvers::{DenseSolveCore, Solve};
 
@@ -407,7 +408,7 @@ mod tests {
                 .factorize(&design.col_ptr, &design.row_idx, &values)
                 .unwrap();
             let llt = dense.llt(Side::Lower).unwrap();
-            assert_close(factor.log_det(), dense_log_det(&llt), 1e-12, "log det");
+            assert_relative_eq!(factor.log_det(), dense_log_det(&llt), max_relative = 1e-12);
 
             let mut rng = Lcg::new(100 + seed);
             let b = Mat::<f64>::from_fn(q, 2, |_, _| rng.normal());
@@ -416,7 +417,7 @@ mod tests {
             factor.solve_in_place(rhs.as_mut());
             for c in 0..2 {
                 for i in 0..q {
-                    assert_close(rhs[(i, c)], expected[(i, c)], 1e-10, "solve");
+                    assert_abs_diff_eq!(rhs[(i, c)], expected[(i, c)], epsilon = 1e-10);
                 }
             }
         }
@@ -446,7 +447,7 @@ mod tests {
                 let expected = dense.llt(Side::Lower).unwrap().inverse();
                 let diagonal = factor.inverse_diagonal();
                 for i in 0..q {
-                    assert_close(diagonal[i], expected[(i, i)], 1e-12, "diag(A^-1)");
+                    assert_abs_diff_eq!(diagonal[i], expected[(i, i)], epsilon = 1e-12);
                 }
             }
         }

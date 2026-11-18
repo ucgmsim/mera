@@ -11,5 +11,9 @@ publish = false
 faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg"] }
 thiserror = "2"
 
+[dev-dependencies]
+# Comparisons of floating-point numbers within a tolerance, in the tests.
+approx = "0.5"
+
 [lints]
 workspace = true

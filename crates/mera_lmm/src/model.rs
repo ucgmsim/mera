@@ -308,7 +308,8 @@ impl CrossedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{Lcg, assert_close};
+    use crate::testing::Lcg;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
 
     #[test]
     fn supernodal_layout_gives_the_same_fits() {
@@ -325,17 +326,15 @@ mod tests {
         assert!(models[0].factor.is_simplicial() && !models[1].factor.is_simplicial());
         for theta in [[0.8, 1.3], [0.2, 0.6]] {
             let [expected, fit] = models.each_mut().map(|m| m.fit_at(&theta).unwrap());
-            assert_close(fit.deviance, expected.deviance, 1e-12, "deviance");
-            assert_close(fit.sigma, expected.sigma, 1e-12, "sigma");
-            for (what, values, expected_values) in [
-                ("beta", &fit.beta, &expected.beta),
-                ("beta_se", &fit.beta_se, &expected.beta_se),
-                ("ranef", &fit.ranef, &expected.ranef),
-                ("condsd", &fit.condsd, &expected.condsd),
+            assert_relative_eq!(fit.deviance, expected.deviance, max_relative = 1e-12);
+            assert_relative_eq!(fit.sigma, expected.sigma, max_relative = 1e-12);
+            for (values, expected_values) in [
+                (&fit.beta, &expected.beta),
+                (&fit.beta_se, &expected.beta_se),
+                (&fit.ranef, &expected.ranef),
+                (&fit.condsd, &expected.condsd),
             ] {
-                for (&a, &b) in values.iter().zip(expected_values) {
-                    assert_close(a, b, 1e-10, what);
-                }
+                assert_abs_diff_eq!(values[..], expected_values[..], epsilon = 1e-10);
             }
         }
     }

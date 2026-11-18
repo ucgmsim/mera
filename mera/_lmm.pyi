@@ -9,6 +9,7 @@ Typical use::
 
     model = CrossedModel(codes, n_levels, y, x)   # once per fit
     model.deviance([0.8, 1.2])             # the criterion at a trial theta, many times
+    model.deviance_and_gradient([0.8, 1.2])  # the same, with its slope in each theta^2
     estimates = model.fit_at(best_theta)   # everything else, once
 """
 
@@ -86,6 +87,19 @@ class CrossedModel:
         ``theta`` has one value per grouping factor: the standard deviation of that
         factor's random effects divided by the residual standard deviation. Each must be
         zero or positive. The smaller the criterion, the better ``theta`` fits the data.
+        """
+
+    def deviance_and_gradient(
+        self, theta: Sequence[float]
+    ) -> tuple[float, npt.NDArray[np.float64]]:
+        """The criterion at ``theta``, and its derivative with respect to the square of
+        each theta.
+
+        The derivative says how fast the criterion changes as each ``theta_k ** 2``
+        grows, which tells an optimiser which way is downhill. It is taken with respect
+        to the square because the slope with respect to ``theta_k`` itself is always
+        zero at ``theta_k = 0``. Where a theta is below 1e-7, both results are those at
+        1e-7, which differ from the exact ones by less than rounding matters.
         """
 
     def fit_at(self, theta: Sequence[float]) -> FitAt:

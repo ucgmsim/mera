@@ -102,3 +102,43 @@ def test_rust_deviance_matches_lme4(
         for row in values.to_dict("records"):
             theta = [row["theta_event"], row["theta_site"]][: len(codes)]
             assert rust.deviance(theta) == pytest.approx(row["deviance"], rel=1e-11)
+
+
+@pytest.mark.parametrize("reml", [True, False])
+@pytest.mark.parametrize("p", [0, 2])
+@pytest.mark.parametrize("n_factors", [1, 3])
+@pytest.mark.parametrize("partial", [False, True])
+def test_rust_gradient_matches_differences_of_the_criterion(
+    n_factors: int, p: int, reml: bool, partial: bool
+) -> None:
+    """The gradient is the slope of the criterion in each theta squared, s_k. It must
+    agree with a central difference of the criterion in s_k, the other thetas fixed."""
+    y, codes, n_levels, x = small_problem(n_factors, p, partial)
+    rust = _lmm.CrossedModel(codes, n_levels, y, x, reml=reml)
+    for theta in [np.full(n_factors, 0.8), np.linspace(0.05, 1.5, n_factors)]:
+        value, gradient = rust.deviance_and_gradient(theta.tolist())
+        assert value == pytest.approx(rust.deviance(theta.tolist()), rel=1e-13)
+        for k in range(n_factors):
+            s = theta**2
+            h = 1e-5 * s[k]
+            up, down = s.copy(), s.copy()
+            up[k] += h
+            down[k] -= h
+            difference = (
+                rust.deviance(np.sqrt(up).tolist())
+                - rust.deviance(np.sqrt(down).tolist())
+            ) / (2 * h)
+            assert gradient[k] == pytest.approx(difference, rel=1e-5, abs=1e-6)
+
+
+def test_rust_gradient_at_zero_says_which_way_the_criterion_goes() -> None:
+    """At theta_k = 0 the slope in theta_k is always zero, but the slope in theta_k
+    squared is not: it is negative where a small positive theta_k is better than zero."""
+    y, codes, n_levels, x = small_problem(2, 1)
+    rust = _lmm.CrossedModel(codes, n_levels, y, x)
+    at_zero = rust.deviance([0.0, 0.7])
+    _, gradient = rust.deviance_and_gradient([0.0, 0.7])
+    h = 1e-6
+    difference = (rust.deviance([np.sqrt(h), 0.7]) - at_zero) / h
+    assert gradient[0] == pytest.approx(difference, rel=1e-3)
+    assert gradient[0] < 0  # these data have an effect of the first factor

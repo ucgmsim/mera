@@ -97,6 +97,19 @@ impl PyCrossedModel {
         py.detach(|| model.deviance(&theta)).map_err(to_py_err)
     }
 
+    /// The criterion at `theta` and its derivative with respect to each theta squared.
+    fn deviance_and_gradient<'py>(
+        &mut self,
+        py: Python<'py>,
+        theta: Vec<f64>,
+    ) -> PyResult<(f64, Bound<'py, numpy::PyArray1<f64>>)> {
+        let model = &mut self.inner;
+        let (deviance, gradient) = py
+            .detach(|| model.deviance_and_gradient(&theta))
+            .map_err(to_py_err)?;
+        Ok((deviance, gradient.into_pyarray(py)))
+    }
+
     /// Estimates, random effects and conditional SDs at `theta`.
     fn fit_at<'py>(&mut self, py: Python<'py>, theta: Vec<f64>) -> PyResult<Bound<'py, PyDict>> {
         let model = &mut self.inner;

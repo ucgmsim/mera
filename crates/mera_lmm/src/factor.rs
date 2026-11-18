@@ -260,6 +260,57 @@ impl Factor {
     /// `inverse_diagonal_matches_dense_inverse` at the bottom of this file checks it
     /// against an ordinary dense inverse.
     pub fn inverse_diagonal(&self) -> Vec<f64> {
+        self.with_selected_inverse(|col_ptr, _, z| {
+            // Undo the fill-reducing permutation, if there is one. Level `i` of the
+            // renumbered matrix is level `forward[i]` of the original, so the diagonal
+            // entry of column `i` of Z (the first entry of the column, z[col_ptr[i]])
+            // belongs at `forward[i]`.
+            let n = self.dim();
+            let forward = self.symbolic.perm().map(|perm| perm.arrays().0);
+            let mut diagonal = vec![0.0; n];
+            for (i, &start) in col_ptr[..n].iter().enumerate() {
+                diagonal[forward.map_or(i, |f| f[i])] = z[start];
+            }
+            diagonal
+        })
+    }
+
+    /// The entries of `A^-1` where `A` itself has entries: one value for each stored entry
+    /// of the lower triangle of `A`, given as in [`Factor::new`], in the same order.
+    ///
+    /// These are among the entries that selected inversion computes (see
+    /// [`Factor::inverse_diagonal`]), because `L` has a non-zero wherever `A` does. The
+    /// gradient of the criterion needs them (`CrossedModel::deviance_and_gradient`).
+    pub fn inverse_on_pattern(&self, a_col_ptr: &[usize], a_row_idx: &[usize]) -> Vec<f64> {
+        self.with_selected_inverse(|col_ptr, row_idx, z| {
+            // inverse[i] is the number that level i of the original matrix has in the
+            // renumbered one.
+            let inverse = self.symbolic.perm().map(|perm| perm.arrays().1);
+            let renumbered = |i: usize| inverse.map_or(i, |inv| inv[i]);
+            let mut out = Vec::with_capacity(a_row_idx.len());
+            for c in 0..self.dim() {
+                for &r in &a_row_idx[a_col_ptr[c]..a_col_ptr[c + 1]] {
+                    // Entry (r, c) of A is entry (row, column) of the renumbered matrix,
+                    // taken from its lower triangle: the column is the smaller number.
+                    let (i, j) = (renumbered(r), renumbered(c));
+                    let (column, row) = (i.min(j), i.max(j));
+                    // The rows of a column of L are sorted, so the row is found by
+                    // bisection. It is always there, as L is non-zero wherever A is.
+                    let rows = &row_idx[col_ptr[column]..col_ptr[column + 1]];
+                    let slot = rows.binary_search(&row);
+                    out.push(slot.map_or(0.0, |t| z[col_ptr[column] + t]));
+                }
+            }
+            out
+        })
+    }
+
+    /// Computes the selected inverse `Z` (see [`Factor::inverse_diagonal`]) and hands it
+    /// to `read` together with the layout of `L`: `read(col_ptr, row_idx, z)`, where
+    /// `z[t]` is the entry of `Z` in the row `row_idx[t]` of its column, and column `j`
+    /// owns the entries from `col_ptr[j]` up to `col_ptr[j + 1]`, its diagonal first.
+    /// The rows and columns are numbered as in the renumbered matrix `P A P'`.
+    fn with_selected_inverse<T>(&self, read: impl FnOnce(&[usize], &[usize], &[f64]) -> T) -> T {
         // The recurrences below read L column by column in CSC form. A simplicial factor is
         // stored that way already; a supernodal one is copied into that form first.
         let columns;
@@ -315,15 +366,7 @@ impl Factor {
             }
             z[start] = (1.0 / l_jj - sum) / l_jj;
         }
-        // Undo the fill-reducing permutation, if there is one. Level `i` of the renumbered
-        // matrix is level `forward[i]` of the original, so the diagonal entry of column `i`
-        // of Z (the first entry of the column, z[col_ptr[i]]) belongs at `forward[i]`.
-        let forward = self.symbolic.perm().map(|perm| perm.arrays().0);
-        let mut diagonal = vec![0.0; n];
-        for (i, &start) in col_ptr[..n].iter().enumerate() {
-            diagonal[forward.map_or(i, |f| f[i])] = z[start];
-        }
-        diagonal
+        read(col_ptr, row_idx, &z)
     }
 }
 

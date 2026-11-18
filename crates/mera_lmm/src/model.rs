@@ -109,6 +109,10 @@ use crate::factor::{Factor, FactorKind, dense_log_det};
 /// `ln(2 pi)`.
 const LOG_2PI: f64 = 1.837_877_066_409_345_5;
 
+/// The smallest theta at which the gradient is evaluated: see
+/// [`CrossedModel::deviance_and_gradient`].
+const THETA_FLOOR: f64 = 1e-7;
+
 /// The model evaluated at one `theta`, normally the optimum.
 #[derive(Debug, Clone)]
 pub struct Fit {
@@ -186,6 +190,116 @@ impl CrossedModel {
         Ok(self.profile(theta)?.deviance)
     }
 
+    /// The criterion at `theta`, and its derivative with respect to the *square* of each
+    /// theta: how fast the criterion changes as each `theta_k^2` grows.
+    ///
+    /// With the gradient, an optimiser knows which way is downhill and roughly how far,
+    /// and needs far fewer evaluations than one that only sees values of the criterion.
+    ///
+    /// # Why theta squared
+    ///
+    /// The criterion depends on `theta_k` only through its square, so its slope with
+    /// respect to `theta_k` itself is always zero at `theta_k = 0`: useless for deciding
+    /// whether zero is the best value. The slope with respect to `theta_k^2` is not.
+    ///
+    /// # The formula
+    ///
+    /// For factor `k`, summing over its levels `i`:
+    ///
+    /// ```text
+    /// d(deviance) / d(theta_k^2) = sum_i [ (1 - S_ii) - c_i - dof * u_i^2 / r2 ] / theta_k^2
+    /// ```
+    ///
+    /// - `S = A^-1`, and `1 - S_ii` comes from the change of `log|A|`. It is computed as
+    ///   `sum_j S_ij (A - I)_ji`, which is the same number without the subtraction, which
+    ///   would lose all its digits when `S_ii` is close to 1. Only entries of `S` where
+    ///   `A` has entries are needed, and selected inversion provides those.
+    /// - `c_i = w_i' (X'V^-1X)^-1 w_i`, with `w_i` row `i` of `A^-1 Lambda' Z'X`, comes
+    ///   from the change of `log|X'V^-1X|`. It is left out for ML.
+    /// - `u = A^-1 Lambda' Z'(y - X beta)`, and the last term comes from the change of
+    ///   the penalised residual sum of squares `r2`. Divided by `theta_k`, `u_i` is the
+    ///   weighted residual sum of level `i`; multiplied by it, its random effect.
+    ///
+    /// The square brackets shrink in proportion to `theta_k^2` as `theta_k` goes to
+    /// zero, so the quotient stays finite. To compute it there, the whole evaluation is
+    /// made at `theta_k = THETA_FLOOR` in place of any smaller value. That changes the
+    /// criterion by less than a part in ten thousand million, and `theta = 0` itself is
+    /// still reported exactly by the caller.
+    pub fn deviance_and_gradient(&mut self, theta: &[f64]) -> Result<(f64, Vec<f64>), LmmError> {
+        self.check_theta(theta)?;
+        let theta: Vec<f64> = theta.iter().map(|t| t.max(THETA_FLOOR)).collect();
+        let profile = self.profile(&theta)?;
+        let d = &self.design;
+        let (q, p) = (d.q(), d.p);
+        let dof = self.degrees_of_freedom();
+        // bracket[k]: the sum of the square brackets over the levels of factor k
+        let mut bracket = vec![0.0; d.n_factors()];
+
+        // ---- sum_j S_ij (A - I)_ji ----
+        // `profile` has just factorised A at this theta. For each stored entry of the
+        // lower triangle of A, (A - I) is theta_row * theta_column * Z'Z there. An entry
+        // on the diagonal belongs to one level; an entry below it stands for two entries
+        // of the symmetric matrix, (row, c) and (c, row), one for each of its two levels.
+        let s = self.factor.inverse_on_pattern(&d.col_ptr, &d.row_idx);
+        for c in 0..q {
+            let factor_c = d.level_factor[c];
+            // Walk down column c: its entries of S, their rows, and Z'Z there.
+            let entries = d.col_ptr[c]..d.col_ptr[c + 1];
+            let column = s[entries.clone()]
+                .iter()
+                .zip(&d.row_idx[entries.clone()])
+                .zip(&d.ztz[entries]);
+            for ((&s_entry, &row), &ztz) in column {
+                let factor_row = d.level_factor[row];
+                let term = s_entry * theta[factor_c] * theta[factor_row] * ztz;
+                bracket[factor_c] += term;
+                if row != c {
+                    bracket[factor_row] += term;
+                }
+            }
+        }
+
+        // ---- c_i and dof * u_i^2 / r2 ----
+        let xvx_inverse = profile.xvx.inverse();
+        let w = &profile.w;
+        for i in 0..q {
+            // u_i: column 0 of W is A^-1 Lambda' Z'y, and the others A^-1 Lambda' Z'X
+            let u = w[(i, 0)] - (0..p).map(|a| w[(i, 1 + a)] * profile.beta[a]).sum::<f64>();
+            let c = if self.reml {
+                (0..p)
+                    .flat_map(|a| (0..p).map(move |b| (a, b)))
+                    .map(|(a, b)| w[(i, 1 + a)] * xvx_inverse[(a, b)] * w[(i, 1 + b)])
+                    .sum::<f64>()
+            } else {
+                0.0
+            };
+            bracket[d.level_factor[i]] -= c + dof * u * u / profile.r2;
+        }
+        let gradient = bracket
+            .iter()
+            .zip(&theta)
+            .map(|(sum, t)| sum / (t * t))
+            .collect();
+        Ok((profile.deviance, gradient))
+    }
+
+    /// Checks that `theta` has one finite, non-negative value per grouping factor.
+    fn check_theta(&self, theta: &[f64]) -> Result<(), LmmError> {
+        if theta.len() != self.design.n_factors() {
+            return Err(invalid(format!(
+                "theta has {} values but the model has {} grouping factors",
+                theta.len(),
+                self.design.n_factors()
+            )));
+        }
+        if theta.iter().any(|t| !t.is_finite() || *t < 0.0) {
+            return Err(invalid(format!(
+                "theta must be finite and non-negative, got {theta:?}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Everything mera reports, at `theta`.
     pub fn fit_at(&mut self, theta: &[f64]) -> Result<Fit, LmmError> {
         let profile = self.profile(theta)?;
@@ -246,18 +360,7 @@ impl CrossedModel {
     /// [`CrossedModel::fit_at`] reuses. The module documentation at the top of this file
     /// gives the formulas.
     fn profile(&mut self, theta: &[f64]) -> Result<Profile, LmmError> {
-        if theta.len() != self.design.n_factors() {
-            return Err(invalid(format!(
-                "theta has {} values but the model has {} grouping factors",
-                theta.len(),
-                self.design.n_factors()
-            )));
-        }
-        if theta.iter().any(|t| !t.is_finite() || *t < 0.0) {
-            return Err(invalid(format!(
-                "theta must be finite and non-negative, got {theta:?}"
-            )));
-        }
+        self.check_theta(theta)?;
         // ---- A at this theta, its Cholesky factor and log|A| ----
         let d = &self.design;
         d.fill_a(theta, &mut self.values);
@@ -350,6 +453,75 @@ mod tests {
                 assert_abs_diff_eq!(values[..], expected_values[..], epsilon = 1e-10);
             }
         }
+    }
+
+    /// A model with two grouping factors and `p` fixed effects (an intercept, then a
+    /// covariate), on random data.
+    fn random_model(p: usize, reml: bool, kind: FactorKind) -> CrossedModel {
+        let mut rng = Lcg::new(11);
+        let n = 240;
+        let events = (0..n).map(|_| rng.below(30)).collect();
+        let sites = (0..n).map(|_| rng.below(18)).collect();
+        let y: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
+        let covariate: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
+        // x is column-major: the column of ones, then the covariate
+        let x: Vec<f64> = std::iter::repeat_n(1.0, n)
+            .chain(covariate)
+            .take(n * p)
+            .collect();
+        let design = Design::from_full_codes(&[events, sites], &y, &x, p).unwrap();
+        CrossedModel::with_factor_kind(design, reml, kind).unwrap()
+    }
+
+    #[test]
+    fn the_gradient_matches_differences_of_the_criterion() {
+        // The gradient is with respect to theta squared, s. A central difference of the
+        // criterion in s_k, with the other factor's theta fixed, must agree with it.
+        for (p, reml) in [(0, true), (1, true), (2, true), (2, false)] {
+            for kind in [FactorKind::Simplicial, FactorKind::Supernodal] {
+                let mut model = random_model(p, reml, kind);
+                for theta in [[0.8, 1.3], [0.05, 2.0], [3.0, 0.4]] {
+                    let (value, gradient) = model.deviance_and_gradient(&theta).unwrap();
+                    assert_relative_eq!(
+                        value,
+                        model.deviance(&theta).unwrap(),
+                        max_relative = 1e-12
+                    );
+                    for k in 0..2 {
+                        let s = theta[k] * theta[k];
+                        let h = 1e-5 * s;
+                        let mut at = |s_k: f64| {
+                            let mut shifted = theta;
+                            shifted[k] = s_k.sqrt();
+                            model.deviance(&shifted).unwrap()
+                        };
+                        let difference = (at(s + h) - at(s - h)) / (2.0 * h);
+                        assert_relative_eq!(
+                            gradient[k],
+                            difference,
+                            max_relative = 1e-5,
+                            epsilon = 1e-6
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_gradient_is_finite_where_theta_is_zero() {
+        // With respect to theta the slope is always zero at theta = 0. With respect to
+        // theta squared it is not, and it must match a one-sided difference there.
+        let mut model = random_model(1, true, FactorKind::Simplicial);
+        let (_, gradient) = model.deviance_and_gradient(&[0.0, 0.7]).unwrap();
+        let h: f64 = 1e-6;
+        let at_zero = model.deviance(&[0.0, 0.7]).unwrap();
+        let difference = (model.deviance(&[h.sqrt(), 0.7]).unwrap() - at_zero) / h;
+        assert!(gradient[0].is_finite() && gradient[0] != 0.0);
+        assert_relative_eq!(gradient[0], difference, max_relative = 1e-3);
+        // invalid theta is still rejected
+        assert!(model.deviance_and_gradient(&[-1.0, 0.7]).is_err());
+        assert!(model.deviance_and_gradient(&[f64::NAN, 0.7]).is_err());
     }
 
     #[test]

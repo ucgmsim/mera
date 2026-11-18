@@ -103,21 +103,32 @@ def fit_inputs(
     return y, groups_of(df, site_term)
 
 
+def add_covariate_trend(
+    y: np.ndarray, events: np.ndarray, sites: np.ndarray
+) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """A response with a trend in two made-up covariates, its grouping factors
+    (events, sites) and the covariates.
+
+    One covariate is constant within an event, like magnitude, and one differs for
+    every record, like distance. The trend is added to ``y``, so that the coefficients
+    of the covariates are far from zero.
+    """
+    # covariate_fits.csv was made from these draws: keep the seed, the ranges and the
+    # order of the two draws.
+    rng = np.random.default_rng(7)
+    event_levels, event_codes = np.unique(events, return_inverse=True)
+    magnitude = rng.uniform(-1.5, 1.5, size=event_levels.size)[event_codes]
+    distance = rng.normal(size=y.size)
+    covariates = np.column_stack([magnitude, distance])
+    return y + 0.3 * magnitude - 0.2 * distance, [events, sites], covariates
+
+
 def covariate_inputs(
     df: pd.DataFrame, im: str
 ) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
-    """The response, grouping factors and covariates of a fit in COVARIATE_FITS.
-
-    The covariates are made up: one that is constant within an event, like magnitude,
-    and one that differs for every record, like distance. The response is the IM's
-    residual plus a trend in both, so that their coefficients are far from zero.
-    """
-    rng = np.random.default_rng(7)
-    events, ev = np.unique(df["event_id"], return_inverse=True)
-    magnitude = rng.uniform(-1.5, 1.5, size=events.size)[ev]
-    distance = rng.normal(size=len(df))
-    y = df[im].to_numpy() + 0.3 * magnitude - 0.2 * distance
-    return y, groups_of(df, True), np.column_stack([magnitude, distance])
+    """The response, grouping factors and covariates of a fit in COVARIATE_FITS: an IM's
+    residuals with the trend of :func:`add_covariate_trend`."""
+    return add_covariate_trend(df[im].to_numpy(), *groups_of(df, True))
 
 
 @dataclass(frozen=True)

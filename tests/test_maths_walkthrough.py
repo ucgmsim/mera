@@ -3,6 +3,7 @@ agree with mera itself: it is the documentation's account of what the engine com
 
 import numpy as np
 import pytest
+from example_data import add_covariate_trend
 
 from mera.example import maths_walkthrough as walkthrough
 from mera.lmm import fit_lmm
@@ -10,15 +11,27 @@ from mera.lmm import fit_lmm
 
 @pytest.mark.parametrize("intercept", [True, False])
 @pytest.mark.parametrize("site_term", [True, False])
-def test_walkthrough_matches_fit_lmm(intercept: bool, site_term: bool) -> None:
+@pytest.mark.parametrize("with_covariates", [False, True])
+def test_walkthrough_matches_fit_lmm(
+    intercept: bool, site_term: bool, with_covariates: bool
+) -> None:
+    """Every result of fit_lmm must equal that of the dense numpy implementation, which
+    is independent of the Rust engine: with and without a bias, a site term and fixed
+    effects beside the bias."""
     y, events, sites = walkthrough.make_example_data()
-    groups = [events, sites] if site_term else [events]
     x = np.ones((y.size, int(intercept)))
+    covariates = None
+    if with_covariates:
+        y, _, covariates = add_covariate_trend(y, events, sites)
+        x = np.column_stack([x, covariates])
+    groups = [events, sites] if site_term else [events]
     z, level_factor, levels = walkthrough.indicator_matrix(groups)
     model = walkthrough.Model(y, x, z, level_factor)
     ours = walkthrough.estimates(walkthrough.find_theta(model), model)
-    fit = fit_lmm(y, groups, intercept=intercept)
+    fit = fit_lmm(y, groups, intercept=intercept, covariates=covariates)
 
+    assert fit.converged
+    assert fit.beta.shape == fit.beta_se.shape == (x.shape[1],)
     for level, expected in zip(levels, fit.levels):
         np.testing.assert_array_equal(level, expected)
     assert ours.deviance == pytest.approx(fit.deviance, abs=1e-8)
@@ -31,6 +44,7 @@ def test_walkthrough_matches_fit_lmm(intercept: bool, site_term: bool) -> None:
     np.testing.assert_allclose(ours.condsd, np.concatenate(fit.condsd), atol=1e-6)
     np.testing.assert_allclose(ours.fitted, fit.fitted, atol=1e-6)
     np.testing.assert_allclose(ours.resid, fit.resid, atol=1e-6)
+    np.testing.assert_allclose(fit.resid, y - fit.fitted)
 
 
 @pytest.mark.parametrize("theta", [(1.0, 1.0), (0.0, 0.7), (0.4, 2.5)])

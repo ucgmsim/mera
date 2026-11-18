@@ -5,6 +5,7 @@ from example_data import (
     COVARIATE_FITS,
     LME4_FITS,
     Lme4Fit,
+    add_covariate_trend,
     covariate_inputs,
     fit_inputs,
     groups_of,
@@ -250,41 +251,9 @@ def test_covariates_match_lme4(
 
 
 def covariate_data() -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
-    """A response with a trend in two covariates, its groups (events, sites) and the
-    covariates: one that is constant within an event, like magnitude, and one that
-    differs for every record, like distance."""
-    y, events, sites = walkthrough.make_example_data()
-    rng = np.random.default_rng(7)
-    event_levels, event_codes = np.unique(events, return_inverse=True)
-    magnitude = rng.uniform(-1.0, 1.0, size=event_levels.size)[event_codes]
-    distance = rng.normal(size=y.size)
-    covariates = np.column_stack([magnitude, distance])
-    return y + 0.3 * magnitude - 0.2 * distance, [events, sites], covariates
-
-
-@pytest.mark.parametrize("intercept", [True, False])
-def test_covariates_match_the_dense_implementation(intercept: bool) -> None:
-    """Fixed effects beside the bias: every result must equal that of the dense numpy
-    implementation, which is independent of the Rust engine."""
-    y, groups, covariates = covariate_data()
-    x = np.column_stack([np.ones((y.size, int(intercept))), covariates])
-    z, level_factor, _ = walkthrough.indicator_matrix(groups)
-    model = walkthrough.Model(y, x, z, level_factor)
-    dense = walkthrough.estimates(walkthrough.find_theta(model), model)
-
-    fit = fit_lmm(y, groups, intercept=intercept, covariates=covariates)
-
-    assert fit.converged
-    assert fit.beta.shape == fit.beta_se.shape == (int(intercept) + 2,)
-    assert fit.deviance == pytest.approx(dense.deviance, abs=1e-8)
-    np.testing.assert_allclose(fit.theta, dense.theta, atol=1e-6)
-    assert fit.sigma == pytest.approx(dense.sigma, abs=1e-7)
-    np.testing.assert_allclose(fit.beta, dense.beta, atol=1e-7)
-    np.testing.assert_allclose(fit.beta_se, dense.beta_se, atol=1e-7)
-    np.testing.assert_allclose(np.concatenate(fit.ranef), dense.ranef, atol=1e-6)
-    np.testing.assert_allclose(np.concatenate(fit.condsd), dense.condsd, atol=1e-6)
-    np.testing.assert_allclose(fit.fitted, dense.fitted, atol=1e-6)
-    np.testing.assert_allclose(fit.resid, y - fit.fitted)
+    """The small example of the walkthrough with a trend in two made-up covariates:
+    the response, its groups (events, sites) and the covariates."""
+    return add_covariate_trend(*walkthrough.make_example_data())
 
 
 def test_a_trend_added_to_the_response_goes_to_its_coefficient() -> None:

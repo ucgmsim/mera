@@ -1,6 +1,6 @@
 //! Step 1 of a fit: reduce the data to the few sums that every later step needs.
 //!
-//! The optimiser evaluates the criterion at dozens of trial values of theta (see
+//! The optimiser evaluates the criterion at many trial values of theta (see
 //! `model.rs`). Nothing in this file depends on theta, so it is all computed once, when
 //! the model is created:
 //!

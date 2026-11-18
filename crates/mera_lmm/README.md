@@ -1,9 +1,9 @@
 # mera_lmm: the numerical engine
 
 This crate ("crate" is Rust's word for a package) is the part of MERA that does the heavy
-arithmetic. Python hands it the data of one fit; it evaluates the REML criterion for any
-trial value of θ, and returns the estimates at the best one. The search for the best θ
-stays in Python (`mera/lmm.py`).
+arithmetic. Python hands it the data of one fit; it evaluates the REML criterion and its
+slope for any trial value of θ, and returns the estimates at the best one. The search for
+the best θ stays in Python (`mera/lmm.py`).
 
 This README is for readers who know some Python and no Rust. It covers:
 
@@ -54,6 +54,10 @@ Python: model.deviance(theta)
           ├─ factor.rs    Factor::solve_in_place       A^-1 R
           └─ model.rs     the rest of profile          beta, r2 and the criterion
 ```
+
+The search calls `model.deviance_and_gradient(theta)` instead, which also returns the
+slope of the criterion. `CrossedModel::deviance_and_gradient` runs the same steps, and
+then `Factor::inverse_on_pattern` for the entries of A<sup>−1</sup> that the slope needs.
 
 `CrossedModel::fit_at` runs the same steps once more at the best θ, and then
 `Factor::inverse_diagonal` for the conditional standard deviations.

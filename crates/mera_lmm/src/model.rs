@@ -3,9 +3,10 @@
 //!
 //! This file holds the statistics. `design.rs` prepared the sums and `factor.rs` supplies
 //! the linear algebra; here they are combined into lme4's profiled REML criterion
-//! ([`CrossedModel::deviance`]) and into the estimates that mera reports
-//! ([`CrossedModel::fit_at`]). `docs/mixed_effects_maths.md`, at the top of the repository,
-//! derives the formulas. The summary below is enough to follow the code.
+//! ([`CrossedModel::deviance`]), its slope ([`CrossedModel::deviance_and_gradient`]) and
+//! the estimates that mera reports ([`CrossedModel::fit_at`]).
+//! `docs/mixed_effects_maths.md`, at the top of the repository, derives the formulas. The
+//! summary below is enough to follow the code.
 //!
 //! # The model
 //!
@@ -151,8 +152,9 @@ struct Profile {
 /// A linear mixed model with crossed random intercepts that can be evaluated at any theta.
 ///
 /// Python creates one of these per fit (`mera._lmm.CrossedModel`), calls
-/// [`CrossedModel::deviance`] many times while the optimiser searches for the best theta,
-/// and then calls [`CrossedModel::fit_at`] once, at that theta.
+/// [`CrossedModel::deviance_and_gradient`] at each theta that the optimiser tries while
+/// it searches for the best one, and then calls [`CrossedModel::fit_at`] once, at that
+/// theta.
 pub struct CrossedModel {
     design: Design,
     reml: bool,
@@ -164,12 +166,11 @@ pub struct CrossedModel {
 impl CrossedModel {
     /// Analyses the sparsity pattern once; `reml` selects REML (true) or ML.
     pub fn new(design: Design, reml: bool) -> Result<Self, LmmError> {
-        Self::with_factor_kind(design, reml, FactorKind::Auto)
+        Self::with_factor_kind(design, reml, FactorKind::Supernodal)
     }
 
-    /// As [`CrossedModel::new`], with the layout of the factor given rather than left to
-    /// faer. The tests force the supernodal layout, which faer picks only for designs
-    /// larger than theirs.
+    /// As [`CrossedModel::new`], with the layout of the factor given. Fits use the
+    /// supernodal layout; the tests also check the simplicial one.
     fn with_factor_kind(design: Design, reml: bool, kind: FactorKind) -> Result<Self, LmmError> {
         // `1 + design.p` is the number of columns of [y X], which are solved for together.
         let factor = Factor::new(&design.col_ptr, &design.row_idx, 1 + design.p, kind)?;
@@ -185,7 +186,9 @@ impl CrossedModel {
     /// The profiled REML criterion (ML: -2 log-likelihood) at `theta`.
     ///
     /// This is the function that the optimiser minimises. `theta` has one value per
-    /// grouping factor, each zero or positive.
+    /// grouping factor, each zero or positive. The optimiser normally asks for the
+    /// gradient too ([`CrossedModel::deviance_and_gradient`]), and calls this only if it
+    /// has to fall back on a search that does not use it.
     pub fn deviance(&mut self, theta: &[f64]) -> Result<f64, LmmError> {
         Ok(self.profile(theta)?.deviance)
     }
@@ -240,7 +243,7 @@ impl CrossedModel {
         // lower triangle of A, (A - I) is theta_row * theta_column * Z'Z there. An entry
         // on the diagonal belongs to one level; an entry below it stands for two entries
         // of the symmetric matrix, (row, c) and (c, row), one for each of its two levels.
-        let s = self.factor.inverse_on_pattern(&d.col_ptr, &d.row_idx);
+        let s = self.factor.inverse_on_pattern();
         for c in 0..q {
             let factor_c = d.level_factor[c];
             // Walk down column c: its entries of S, their rows, and Z'Z there.

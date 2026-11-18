@@ -237,24 +237,30 @@ for `site` finds every place:
 
 1. **`run_mera`'s arguments.** Add the name of the new column, for example
    `region_cname: str | None = None`.
-2. **`random_effects_columns`**, at the top of `run_mera`. Append the new column. The
+2. **`random_effects_columns`**, at the top of `run_mera`. Append the new column. This
+   list selects the id columns that each fit receives, and that are attached to
+   `rem_res_df`.
+3. **The `tasks` tuple** in `run_mera` and **the arguments of `_run_im_mera`**. Pass the
+   new column name through, as `site_cname` is.
+4. **`group_columns`**, at the top of `_run_im_mera`. Append the new column here too. The
    order of this list is the order of the grouping factors, so the new factor is index 2
    of `fit.levels`, `fit.ranef`, `fit.condsd` and `fit.sd`. If the site term is switched
    off (`compute_site_term=False`), it is index 1 instead: look its position up with
-   `random_effects_columns.index(region_cname)` rather than writing 2.
-3. **The `tasks` tuple** in `run_mera` and **the arguments of `_run_im_mera`**. Pass the
-   new column name through, as `site_cname` is.
-4. **"Result series" in `_run_im_mera`.** Create a series for the new terms and one for
+   `group_columns.index(region_cname)` rather than writing 2. The warnings about events
+   and sites with few records look up a minimum for each column of this list in
+   `minimums`: add one for the new column.
+5. **"Result series" in `_run_im_mera`.** Create a series for the new terms and one for
    their conditional standard deviations, as for the sites, and add a name for the new
    standard deviation to the index of `bias_std_series`.
-5. **After the call to `fit_lmm`** in `_run_im_mera`. Fill them in from `fit.levels[2]`,
-   `fit.ranef[2]`, `fit.condsd[2]` and `fit.sd[2]`, and add them to the dictionary that
-   the function returns.
-6. **"Unpack results" in `run_mera`.** Join the new series into tables, and include the
-   new standard deviation in the total `sigma`. `run_mera` ends in two branches, with and
-   without the site term, and both need the change. When the new factor is not fitted,
-   drop its column from `bias_std_df`, as the second branch does for `phi_S2S`.
-7. **`MeraResults`.** Add the two tables as attributes. `MeraResults` is created by
+6. **After the call to `fit_lmm`** in `_run_im_mera`. Fill them in from the new factor's
+   entries of `fit.levels`, `fit.ranef`, `fit.condsd` and `fit.sd`, and add them to the
+   dictionary that the function returns.
+7. **"Unpack results" in `run_mera`.** Make the tables of the new series with
+   `table(...)`, as for the sites, and pass them to `MeraResults`. Add the square of the
+   new standard deviation to `variance`, from which the total `sigma` is computed. When
+   the new factor is not fitted, drop its column from `bias_std_df`, as is done for
+   `phi_S2S`.
+8. **`MeraResults`.** Add the two tables as attributes. `MeraResults` is created by
    position in `run_mera`, so put the new attributes last, with a default of `None`, and
    existing code keeps working. `save`, `load` and their parquet versions go through
    the attributes by themselves, and need no change: a table that is `None` is not
@@ -270,10 +276,11 @@ other than the event and site ids as an IM. Give it only those columns, for exam
 for every IM, three places in `mera/analysis.py` change:
 
 1. the `tasks` tuple in `run_mera` selects the columns that each fit receives
-   (`residual_df[[cur_im, *random_effects_columns]]`): add the covariate columns;
-2. `cur_columns` at the top of `_run_im_mera` selects them again, before the mask is
-   applied: add them there too, so that the covariates are masked with the IM, and pass
-   `covariates=cur_residual_df[covariate_columns].to_numpy()` to `fit_lmm`;
+   (`residual_df[[cur_im, *random_effects_columns]]`): add the covariate columns, and
+   pass their names to `_run_im_mera` as a new argument;
+2. in `_run_im_mera`, `cur_residual_df` holds the records that the mask leaves for the
+   IM, with all the columns of the task, so the covariates are masked with the IM:
+   pass `covariates=cur_residual_df[covariate_columns].to_numpy()` to `fit_lmm`;
 3. the bias is stored in `bias_std_series` near the end of `_run_im_mera`: store
    `fit.beta[1:]` and `fit.beta_se[1:]` there as well, under names of your choice, and add
    those names to the index of `bias_std_series`.

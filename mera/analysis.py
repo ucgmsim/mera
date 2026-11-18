@@ -372,8 +372,8 @@ def run_mera(
         random_effects_columns.append(site_cname)
 
     # One task per IM: the tuple of arguments of one call to _run_im_mera. A task
-    # holds only that IM's columns, because in parallel each task is copied to a worker
-    # process.
+    # holds only that IM's columns of the residuals and of the mask, because in
+    # parallel each task is copied to a worker process.
     tasks = (
         (
             residual_df[[cur_im, *random_effects_columns]],
@@ -383,8 +383,7 @@ def run_mera(
             assume_biased,
             min_num_records_per_event,
             min_num_records_per_site,
-            random_effects_columns,
-            None if mask is None else mask[[cur_im]],
+            None if mask is None else mask[cur_im],
             raise_warnings,
             verbose,
         )
@@ -406,63 +405,54 @@ def run_mera(
             warnings.warn(message, category, stacklevel=2)
 
     # Unpack results
-    # Each result holds one IM's series: put them side by side, one column per IM.
-    event_res_df = pd.concat(
-        [cur_result["event_res_series"] for cur_result in results], axis=1
-    )
-    event_cond_std_df = pd.concat(
-        [cur_result["event_cond_std_series"] for cur_result in results], axis=1
-    )
-    event_cond_std_df.columns = ims
-    rem_res_df = pd.concat([cur_result["rem_res_df"] for cur_result in results], axis=1)
+    # Each result holds one IM's series.
+    def table(key: str) -> pd.DataFrame:
+        """
+        Puts the series of one kind side by side, one column per IM
+
+        Parameters
+        ----------
+        key : str
+            Key of the series in each IM's result, such as "event_res_series"
+
+        Returns
+        -------
+        pd.DataFrame
+            Table with one column per IM
+        """
+        return pd.concat([cur_result[key] for cur_result in results], axis=1)
+
     # The id columns in one concat: inserting columns into a frame with a block per IM
     # makes pandas warn that it is fragmented (from 101 IMs).
+    rem_res_df = table("rem_res_series")
     rem_res_df = pd.concat(
         [rem_res_df, residual_df.loc[rem_res_df.index, random_effects_columns]], axis=1
     )
     bias_std_df = pd.DataFrame(
         [cur_result["bias_std_series"] for cur_result in results], index=pd.Index(ims)
     )
-    fit_df = pd.concat([cur_result["fit_series"] for cur_result in results], axis=1)
-    if compute_site_term:
-        site_res_df = pd.concat(
-            [cur_result["site_res_series"] for cur_result in results], axis=1
-        )
-        site_cond_std_df = pd.concat(
-            [cur_result["site_cond_std_series"] for cur_result in results], axis=1
-        )
-        site_cond_std_df.columns = ims
 
     # Compute total sigma and return
+    # The total variance is the sum of the squares of the standard deviations. The
+    # site tables and phi_S2S exist only if a site term was fitted.
+    variance = bias_std_df["tau"] ** 2
+    site_res_df, site_cond_std_df = None, None
     if compute_site_term:
-        bias_std_df["sigma"] = (
-            bias_std_df["tau"] ** 2
-            + bias_std_df["phi_S2S"] ** 2
-            + bias_std_df["phi_w"] ** 2
-        ) ** (1 / 2)
-        return MeraResults(
-            event_res_df,
-            event_cond_std_df,
-            rem_res_df,
-            bias_std_df,
-            fit_df,
-            site_res_df,
-            site_cond_std_df,
-        )
+        site_res_df = table("site_res_series")
+        site_cond_std_df = table("site_cond_std_series")
+        variance = variance + bias_std_df["phi_S2S"] ** 2
     else:
         bias_std_df = bias_std_df.drop(columns=["phi_S2S"])
-        bias_std_df["sigma"] = (
-            bias_std_df["tau"] ** 2 + bias_std_df["phi_w"] ** 2
-        ) ** (1 / 2)
-        return MeraResults(
-            event_res_df,
-            event_cond_std_df,
-            rem_res_df,
-            bias_std_df,
-            fit_df,
-            None,
-            None,
-        )
+    bias_std_df["sigma"] = (variance + bias_std_df["phi_w"] ** 2) ** (1 / 2)
+    return MeraResults(
+        table("event_res_series"),
+        table("event_cond_std_series"),
+        rem_res_df,
+        bias_std_df,
+        table("fit_series"),
+        site_res_df,
+        site_cond_std_df,
+    )
 
 
 def _run_im_mera(
@@ -473,8 +463,7 @@ def _run_im_mera(
     assume_biased: bool,
     min_num_records_per_event: int,
     min_num_records_per_site: int,
-    random_effects_columns: list[str],
-    mask: pd.DataFrame | None,
+    mask: pd.Series | None,
     raise_warnings: bool,
     verbose: bool,
 ):
@@ -502,10 +491,8 @@ def _run_im_mera(
         Events with fewer records than this are reported when raise_warnings is True
     min_num_records_per_site : int
         Sites with fewer records than this are reported when raise_warnings is True
-    random_effects_columns : list of str
-        Columns holding the grouping factors (event, and site if fitted)
-    mask : pd.DataFrame or None
-        Mask selecting the records used per IM, None to use all records
+    mask : pd.Series or None
+        True for the records used for this IM, None to use all records
     raise_warnings : bool
         Whether to print warnings for events and sites with too few records
     verbose : bool
@@ -514,21 +501,21 @@ def _run_im_mera(
     Returns
     -------
     dict
-        The per-IM result series and dataframes, keyed as unpacked by run_mera.
+        The per-IM result series, keyed as unpacked by run_mera.
         They are all NaN if the IM has no data.
     """
     if verbose:
         print(f"Processing {im}")
 
+    # The columns holding the grouping factors of the model: the events, and the sites
+    # if a site term is fitted.
+    group_columns = [event_cname] if site_cname is None else [event_cname, site_cname]
+
     # Filter on the mask if given
-    # cur_residual_df holds the records used for this IM's fit: all of them, or those
-    # that the mask marks True.
-    cur_columns = [im] + random_effects_columns
-    cur_residual_df = (
-        residual_df[cur_columns]
-        if mask is None
-        else residual_df[cur_columns].loc[mask[im]]
-    )
+    # used selects the records of this IM's fit: all of them (slice(None) is the ":"
+    # of indexing), or those that the mask marks True. cur_residual_df holds them.
+    used = slice(None) if mask is None else mask
+    cur_residual_df = residual_df.loc[used]
 
     # Check for nans
     if cur_residual_df[im].isna().sum() > 0:
@@ -543,16 +530,14 @@ def _run_im_mera(
         np.unique(residual_df[event_cname].to_numpy().astype(str))
     )
     event_res_series = pd.Series(index=event_ids, dtype=float, name=im)
-    event_cond_std_series = pd.Series(index=event_ids, dtype=float)
+    event_cond_std_series = pd.Series(index=event_ids, dtype=float, name=im)
     bias_std_series = pd.Series(
         index=["bias", "bias_std_err", "tau", "phi_S2S", "phi_w", "sigma"],
         data=np.nan,
         dtype=float,
         name=im,
     )
-    rem_res_df = pd.DataFrame(
-        index=residual_df.index.values, columns=pd.Index([im]), dtype=float
-    )
+    rem_res_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     fit_series = pd.Series(index=residual_df.index.values, dtype=float, name=im)
     site_res_series, site_cond_std_series = None, None
     if site_cname is not None:
@@ -560,12 +545,12 @@ def _run_im_mera(
             np.unique(residual_df[site_cname].to_numpy().astype(str))
         )
         site_res_series = pd.Series(index=site_ids, dtype=float, name=im)
-        site_cond_std_series = pd.Series(index=site_ids, dtype=float)
+        site_cond_std_series = pd.Series(index=site_ids, dtype=float, name=im)
 
     result = {
         "event_res_series": event_res_series,
         "event_cond_std_series": event_cond_std_series,
-        "rem_res_df": rem_res_df,
+        "rem_res_series": rem_res_series,
         "bias_std_series": bias_std_series,
         "fit_series": fit_series,
         "site_res_series": site_res_series,
@@ -581,28 +566,20 @@ def _run_im_mera(
 
     # Generate warnings for insufficient records per event or site
     if raise_warnings:
-        count_per_event = cur_residual_df.groupby(event_cname, observed=True).count()[
-            im
-        ]
-        count_per_site = (
-            cur_residual_df.groupby(site_cname, observed=True).count()[im]
-            if site_cname is not None
-            else pd.Series()
-        )
-        warning_counts = pd.concat(
-            [
-                count_per_event[count_per_event < min_num_records_per_event],
-                count_per_site[count_per_site < min_num_records_per_site],
-            ],
-            axis=0,
-        )
-        for label, count in warning_counts.items():
-            print(f"Warning: For IM {im}, {label} has only {count} records.")
+        minimums = {
+            event_cname: min_num_records_per_event,
+            site_cname: min_num_records_per_site,
+        }
+        for cname in group_columns:
+            # the number of records that each event (or site) has in this fit
+            counts = cur_residual_df.groupby(cname, observed=True)[im].count()
+            for label, count in counts[counts < minimums[cname]].items():
+                print(f"Warning: For IM {im}, {label} has only {count} records.")
 
     # Fit the mixed-effects model
     # groups holds the event id of each record used and, if a site term is fitted,
     # the site id of each: the grouping factors of the model.
-    groups = [cur_residual_df[c].to_numpy() for c in random_effects_columns]
+    groups = [cur_residual_df[c].to_numpy() for c in group_columns]
     # The warnings of the fit are collected rather than shown: see run_mera.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -631,13 +608,9 @@ def _run_im_mera(
 
     # Remaining residuals and fitted values
     # fit.resid and fit.fitted have one value per record used, in the order of the
-    # records, so with a mask they go to the rows that the mask marks True.
-    if mask is None:
-        rem_res_df[im] = fit.resid
-        fit_series[:] = fit.fitted
-    else:
-        rem_res_df.loc[mask[im], im] = fit.resid
-        fit_series.loc[mask[im]] = fit.fitted
+    # records, so they go to the rows of the records used.
+    rem_res_series.loc[used] = fit.resid
+    fit_series.loc[used] = fit.fitted
 
     # Bias
     if assume_biased:

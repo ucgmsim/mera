@@ -55,6 +55,11 @@ FINAL_TR_RADIUS = 1e-8
 # COBYQA gives up, and fit_lmm warns, after this many evaluations of the criterion. A fit
 # normally takes 20 to 100.
 MAX_EVALUATIONS = 1000
+# The length of COBYQA's first steps when fit_lmm is given a start, in the optimiser's
+# variables (omega, below). Its default of 1 suits a search that begins anywhere; from a
+# start that is already close, shorter steps waste fewer evaluations, and they lengthen
+# by themselves if the start turns out to be far off.
+WARM_START_TR_RADIUS = 0.1
 
 
 @dataclass(frozen=True)
@@ -134,6 +139,7 @@ def fit_lmm(
     reml: bool = True,
     name: str | None = None,
     covariates: npt.ArrayLike | None = None,
+    start: npt.ArrayLike | None = None,
 ) -> LmmFit:
     """Fits a linear mixed model with crossed random intercepts.
 
@@ -155,6 +161,10 @@ def fit_lmm(
         More fixed effects: a column per covariate (such as magnitude, or the logarithm
         of Vs30) and a row per observation, or a single covariate as a vector. Each gets
         a coefficient in ``beta``, after the intercept.
+    start : array-like, optional
+        Where the search for ``theta`` starts: one value per grouping factor, for
+        example the ``theta`` of an earlier fit of similar data. The default is 1 for
+        every factor, as in lme4.
 
     Returns
     -------
@@ -167,9 +177,10 @@ def fit_lmm(
         If the inputs are invalid (NaN or infinite values, missing group labels,
         mismatched lengths, no grouping factor, a constant response), if a grouping
         factor has a single level or as many levels as observations (designs lme4 also
-        refuses), or if the fixed effects are collinear: one is an exact combination of
+        refuses), if the fixed effects are collinear (one is an exact combination of
         the others, as a covariate and the same covariate plus a constant are when there
-        is an intercept.
+        is an intercept), or if ``start`` is not one finite, non-negative value per
+        grouping factor.
     RuntimeError
         If a matrix factorisation fails.
 
@@ -195,6 +206,11 @@ def fit_lmm(
     With an intercept, the fit is done on ``y`` less its mean, and the mean is added
     back to the intercept. This changes no result, and keeps the fit accurate however
     large the mean of ``y`` is compared with its spread.
+
+    The result does not depend on ``start``, to the precision of the search, but the
+    number of evaluations does. When many similar datasets are fitted, as in a bootstrap,
+    starting each from the ``theta`` of the fit of the full data saves evaluations:
+    about 15% of them on the example data.
 
     Covariates are used as given. Subtracting a typical value from each (magnitude less
     6, say) makes the intercept the mean at that value rather than at zero, changes
@@ -320,12 +336,28 @@ def fit_lmm(
         # amount wherever it is taken. That holds for log(theta). Against theta^2 the
         # criterion becomes so flat that, from theta of about 50, COBYQA stopped short of
         # the optimum and still reported convergence.
+        options = {"final_tr_radius": FINAL_TR_RADIUS, "maxfev": MAX_EVALUATIONS}
+        if start is None:
+            omega_start = np.full(n_factors, np.log(2.0))  # theta = 1, as lme4 starts
+        else:
+            theta_start = np.asarray(start, dtype=float)
+            if theta_start.shape != (n_factors,):
+                raise ValueError(
+                    f"start needs one value of theta per grouping factor ({n_factors}), "
+                    f"got shape {theta_start.shape}"
+                )
+            if not np.all(np.isfinite(theta_start) & (theta_start >= 0.0)):
+                raise ValueError(
+                    f"start must be finite and not negative, got {theta_start}"
+                )
+            omega_start = np.log1p(theta_start**2)
+            options["initial_tr_radius"] = WARM_START_TR_RADIUS
         result = minimize(
             lambda omega: model.deviance(_theta_from(omega).tolist()),
-            np.full(n_factors, np.log(2.0)),  # theta = 1, where lme4 starts too
+            omega_start,
             method="COBYQA",
             bounds=[(0.0, None)] * n_factors,  # omega >= 0, that is theta >= 0
-            options={"final_tr_radius": FINAL_TR_RADIUS, "maxfev": MAX_EVALUATIONS},
+            options=options,
         )
         # COBYQA only reaches the bound up to its own rounding (~1e-16), which the square
         # root would turn into theta ~ 1e-8. Below the final trust-region radius, omega

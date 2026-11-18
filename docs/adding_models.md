@@ -37,6 +37,7 @@ each event".
 | a grouping inside another (stations within networks) | [1.3](#13-a-grouping-inside-another) | a call to `fit_lmm` |
 | a trend with magnitude, distance, Vs30, ..., or an offset per site class | [1.4](#14-a-trend-with-a-covariate) | an argument of `fit_lmm` |
 | maximum likelihood instead of REML | [1.5](#15-maximum-likelihood-and-comparing-models) | an argument of `fit_lmm` |
+| the same model many times, as in a bootstrap | [1.6](#16-many-similar-fits) | an argument of `fit_lmm` |
 | an extra grouping reported in `run_mera`'s tables | [2.1](#21-report-another-grouping-factor-from-run_mera) | Python edits |
 | covariates in `run_mera`, for every IM | [2.2](#22-covariates-in-run_mera) | Python edits |
 | terms that vary with a covariate, unequal residual scatter, ... | [3](#3-what-would-need-the-rust-engine-changed) | Rust changes, or other software |
@@ -197,6 +198,21 @@ grouping factor that threshold is on the cautious side, because a standard devia
 cannot be negative. The
 [lme4 book](https://people.math.ethz.ch/~maechler/MEMo-pages/lMMwR.pdf) discusses these
 tests.
+
+### 1.6 Many similar fits
+
+A bootstrap refits resampled versions of one dataset, hundreds of times. Each fit searches
+for its `theta` from scratch unless it is told where to start. The `theta` of the fit of
+the full data is a good place:
+
+```python
+full = fit_lmm(y, [events, sites])
+for rows in resamples:  # arrays of row numbers
+    fit = fit_lmm(y[rows], [events[rows], sites[rows]], start=full.theta)
+```
+
+The results are the same as without `start`, to the precision of the search, in fewer
+evaluations of the criterion (`fit.n_evals`).
 
 ## 2. With small changes to the Python
 

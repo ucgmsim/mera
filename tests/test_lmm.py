@@ -325,3 +325,45 @@ def test_rejects_invalid_covariates() -> None:
         fit_lmm(y, groups, covariates=indicators)
     # without the intercept, the same indicators are a valid model
     assert fit_lmm(y, groups, covariates=indicators, intercept=False).beta.shape == (3,)
+
+
+def test_a_start_near_the_optimum_saves_evaluations(
+    example_residuals: pd.DataFrame,
+) -> None:
+    """A search that starts from the theta of an earlier fit ends at the same optimum,
+    in fewer evaluations (33 against 57 here). Refits of similar data, as in a
+    bootstrap, are the use: there the saving is smaller, about 15%."""
+    y, groups = fit_inputs(example_residuals, "PGA", True)
+    cold = fit_lmm(y, groups)
+    warm = fit_lmm(y, groups, start=cold.theta)
+    assert warm.converged
+    np.testing.assert_allclose(warm.theta, cold.theta, atol=1e-6)
+    assert warm.deviance == pytest.approx(cold.deviance, abs=1e-8)
+    assert warm.n_evals < 0.8 * cold.n_evals
+
+
+@pytest.mark.parametrize("start", [(0.0, 0.0), (0.0, 0.2), (50.0, 50.0)])
+def test_the_optimum_does_not_depend_on_the_start(
+    example_residuals: pd.DataFrame, start: tuple[float, float]
+) -> None:
+    """Not even from a start on the boundary (theta = 0) when the optimum is inside it:
+    here lme4 finds theta_event = 0.021."""
+    df = example_residuals
+    y = synthetic(df, "weak_effects", seed=133)
+    groups = groups_of(df, True)
+    expected = fit_lmm(y, groups, intercept=False)
+    fit = fit_lmm(y, groups, intercept=False, start=start)
+    assert fit.converged
+    assert fit.theta[0] > 0.0
+    np.testing.assert_allclose(fit.theta, expected.theta, atol=1e-6)
+
+
+def test_rejects_invalid_start() -> None:
+    y, groups, _ = covariate_data()
+    with pytest.raises(ValueError, match="one value of theta per grouping factor"):
+        fit_lmm(y, groups, start=[1.0])
+    with pytest.raises(ValueError, match="one value of theta per grouping factor"):
+        fit_lmm(y, groups, start=1.0)
+    for bad in [-0.5, np.nan, np.inf]:
+        with pytest.raises(ValueError, match="finite and not negative"):
+            fit_lmm(y, groups, start=[1.0, bad])

@@ -1,4 +1,4 @@
-//! Step 2 of a fit: the Cholesky factorisation of `A`, and the three things read from it.
+//! Step 2 of a fit: the Cholesky factorisation of `A`, and what is read from it.
 //!
 //! # What a Cholesky factorisation is, and why the fit needs one
 //!
@@ -22,7 +22,9 @@
 //!   because equations with a triangular matrix can be solved one unknown at a time
 //!   ([`Factor::solve_in_place`]);
 //! - the diagonal of the inverse of `A`, which the conditional standard deviations need,
-//!   can be computed without forming the whole inverse ([`Factor::inverse_diagonal`]).
+//!   can be computed without forming the whole inverse ([`Factor::inverse_diagonal`]);
+//! - so can the entries of the inverse where `A` itself has entries, which the slope of
+//!   the criterion needs ([`Factor::inverse_on_pattern`]).
 //!
 //! # Keeping it sparse
 //!
@@ -298,9 +300,8 @@ impl Factor {
     /// Selected inversion is the most intricate part of the crate: the functions
     /// `simplicial_selected_inverse` and `supernodal_selected_inverse` below, one for
     /// each layout of `L`. It can be read as a black box that returns entries of the
-    /// inverse. The tests `inverse_diagonal_matches_dense_inverse` and
-    /// `inverse_on_pattern_matches_dense_inverse` at the bottom of this file check those
-    /// entries against an ordinary dense inverse.
+    /// inverse. The test `selected_inverse_matches_dense_inverse` at the bottom of this
+    /// file checks those entries against an ordinary dense inverse.
     pub fn inverse_diagonal(&self) -> Vec<f64> {
         let z = self.selected_inverse();
         // Pick out the diagonal entries. `diagonal_slots` says where each one is, and
@@ -478,8 +479,12 @@ fn supernodal_selected_inverse(
     l_values: &[f64],
 ) -> Vec<f64> {
     let n = s.nrows();
+    // `llt` pairs the pattern of L with its values, so that faer can hand out the dense
+    // block of each supernode (as in `Factor::log_det`).
+    let llt = SupernodalLltRef::<usize, f64>::new(s, l_values);
     // Supernode j groups the columns begin[j] up to, but not including, end[j]. Its
-    // values are the entries val_ptr[j] up to val_ptr[j + 1] of `l_values`.
+    // values are the entries val_ptr[j] up to val_ptr[j + 1] of `l_values`, and its
+    // part of Z is kept in the same places of `z_values`.
     let (begin, end, val_ptr) = (s.supernode_begin(), s.supernode_end(), s.col_ptr_for_val());
     // supernode_of[c]: the supernode that holds column c.
     // (`.fill(j)` sets every entry of that part of the list to j.)
@@ -499,27 +504,27 @@ fn supernodal_selected_inverse(
     // for every supernode, rather than asking for memory each time.
     let (mut inverse_buffer, mut y_buffer, mut z_rr_buffer) = (Vec::new(), Vec::new(), Vec::new());
     for j in (0..s.n_supernodes()).rev() {
-        // width: the number of columns of J. rows: R. m: the number of rows of R.
-        let width = end[j] - begin[j];
-        let rows = s.supernode(j).pattern();
+        let node = llt.supernode(j);
+        // rows: R, the rows below the supernode. m: how many of them there are.
+        let rows = node.pattern();
         let m = rows.len();
-        // The values of the supernode, seen as a matrix with `width + m` rows and `width`
-        // columns, without copying them. (`MatRef` is faer's read-only view of a matrix,
-        // and `MatMut`, below, a view that can be written to. The flat list holds the
-        // matrix column after column, hence `column_major`.) Its first `width` rows are
-        // L_JJ, and the `m` rows after them L_RJ.
-        let l_block = MatRef::from_column_major_slice(
-            &l_values[val_ptr[j]..val_ptr[j + 1]],
-            width + m,
-            width,
-        );
-        let (l_jj, l_rj) = (l_block.subrows(0, width), l_block.subrows(width, m));
+        // The values of the supernode as a matrix, without copying them: a column for
+        // each column of J, with the rows of J first and the rows R after them.
+        // (`MatRef` is faer's read-only view of a matrix, and `MatMut`, below, a view
+        // that can be written to.)
+        let l_block = node.val();
+        // width: the number of columns of J
+        let width = l_block.ncols();
+        // Split the block after its first `width` rows: L_JJ, then L_RJ.
+        let (l_jj, l_rj) = l_block.split_at_row(width);
 
         // ---- L_JJ^-1 and Y = L_RJ L_JJ^-1 ----
         // Empty the working list and refill it with zeros, view it as a square matrix,
         // and write the inverse of L_JJ into it. The inverse of a lower triangular
-        // matrix is lower triangular too. (`.as_mut()` lends a matrix to a function to
-        // write to, and `.as_ref()` to read from.)
+        // matrix is lower triangular too. (`from_column_major_slice_mut` views a flat
+        // list as a matrix with the given numbers of rows and columns, stored column
+        // after column. `.as_mut()` lends a matrix to a function to write to, and
+        // `.as_ref()` to read from.)
         inverse_buffer.clear();
         inverse_buffer.resize(width * width, 0.0);
         let mut inverse = MatMut::from_column_major_slice_mut(&mut inverse_buffer, width, width);
@@ -688,14 +693,20 @@ mod tests {
         (design, values, dense)
     }
 
+    /// A factor of the given layout for the pattern of `design`, factorised with `values`.
+    fn factorised(design: &Design, values: &[f64], rhs_ncols: usize, kind: FactorKind) -> Factor {
+        let mut factor = Factor::new(&design.col_ptr, &design.row_idx, rhs_ncols, kind).unwrap();
+        factor
+            .factorize(&design.col_ptr, &design.row_idx, values)
+            .unwrap();
+        factor
+    }
+
     fn check_log_det_and_solve(kind: FactorKind) {
         for seed in 0..4 {
             let (design, values, dense) = random_matrix(seed, 120, 15, 11);
             let q = design.q();
-            let mut factor = Factor::new(&design.col_ptr, &design.row_idx, 2, kind).unwrap();
-            factor
-                .factorize(&design.col_ptr, &design.row_idx, &values)
-                .unwrap();
+            let mut factor = factorised(&design, &values, 2, kind);
             let llt = dense.llt(Side::Lower).unwrap();
             assert_relative_eq!(factor.log_det(), dense_log_det(&llt), max_relative = 1e-12);
 
@@ -737,41 +748,21 @@ mod tests {
     }
 
     #[test]
-    fn inverse_diagonal_matches_dense_inverse() {
+    fn selected_inverse_matches_dense_inverse() {
         for kind in [FactorKind::Simplicial, FactorKind::Supernodal] {
             for (n, events, sites) in SHAPES {
                 for seed in 0..4 {
                     let (design, values, dense) = random_matrix(seed, n, events, sites);
-                    let q = design.q();
-                    let mut factor =
-                        Factor::new(&design.col_ptr, &design.row_idx, 1, kind).unwrap();
+                    let factor = factorised(&design, &values, 1, kind);
                     assert_eq!(factor.is_simplicial(), kind == FactorKind::Simplicial);
-                    factor
-                        .factorize(&design.col_ptr, &design.row_idx, &values)
-                        .unwrap();
                     let expected = dense.llt(Side::Lower).unwrap().inverse();
+                    // The diagonal, in the order of the levels.
                     let diagonal = factor.inverse_diagonal();
-                    for i in 0..q {
+                    for i in 0..design.q() {
                         assert_abs_diff_eq!(diagonal[i], expected[(i, i)], epsilon = 1e-12);
                     }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn inverse_on_pattern_matches_dense_inverse() {
-        // One value for each stored entry of A, in the order of its columns and rows.
-        for kind in [FactorKind::Simplicial, FactorKind::Supernodal] {
-            for (n, events, sites) in SHAPES {
-                for seed in 0..4 {
-                    let (design, values, dense) = random_matrix(seed, n, events, sites);
-                    let mut factor =
-                        Factor::new(&design.col_ptr, &design.row_idx, 1, kind).unwrap();
-                    factor
-                        .factorize(&design.col_ptr, &design.row_idx, &values)
-                        .unwrap();
-                    let expected = dense.llt(Side::Lower).unwrap().inverse();
+                    // One value for each stored entry of A, in the order of its columns
+                    // and rows.
                     let on_pattern = factor.inverse_on_pattern();
                     assert_eq!(on_pattern.len(), design.row_idx.len());
                     for c in 0..design.q() {
@@ -790,7 +781,7 @@ mod tests {
 
     #[test]
     fn the_sparse_shape_has_many_supernodes() {
-        // What the two tests above rely on to reach every part of the supernodal code.
+        // What the test above relies on to reach every part of the supernodal code.
         let (n, events, sites) = SHAPES[1];
         let (design, _, _) = random_matrix(0, n, events, sites);
         let factor =
@@ -807,12 +798,8 @@ mod tests {
         let design = Design::from_full_codes(&[codes], &[0.0; 40], &[], 0).unwrap();
         let mut values = vec![0.0; design.ztz.len()];
         design.fill_a(&[0.8], &mut values);
-        let mut factor =
-            Factor::new(&design.col_ptr, &design.row_idx, 1, FactorKind::Supernodal).unwrap();
+        let factor = factorised(&design, &values, 1, FactorKind::Supernodal);
         assert!(factor.is_simplicial());
-        factor
-            .factorize(&design.col_ptr, &design.row_idx, &values)
-            .unwrap();
         let log_det: f64 = values.iter().map(|a| a.ln()).sum();
         assert_relative_eq!(factor.log_det(), log_det, max_relative = 1e-12);
         for (computed, a) in factor.inverse_diagonal().iter().zip(&values) {

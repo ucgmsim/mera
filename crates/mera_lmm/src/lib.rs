@@ -19,9 +19,11 @@
 //! the standard deviation of the residual.
 //!
 //! For a given `theta`, this crate computes the REML criterion: a number that measures how
-//! well that `theta` fits the data, smaller being better. Python's `mera.lmm.fit_lmm`
-//! searches for the `theta` with the smallest criterion, then asks this crate for the
-//! estimates at that `theta`. The search itself is not in this crate.
+//! well that `theta` fits the data, smaller being better. It also computes the slope of
+//! the criterion (how fast it changes as each `theta` changes), which tells a search
+//! which way is downhill. Python's `mera.lmm.fit_lmm` searches for the `theta` with the
+//! smallest criterion, then asks this crate for the estimates at that `theta`. The
+//! search itself is not in this crate.
 //!
 //! # Where to find things
 //!
@@ -29,8 +31,8 @@
 //!
 //! 1. `design.rs`: sums over the data that do not depend on `theta`, computed once.
 //! 2. `factor.rs`: the sparse Cholesky factorisation of `A = Lambda' Z'Z Lambda + I`, and
-//!    the log-determinant, solves and diagonal of `A^-1` that are read from it.
-//! 3. `model.rs`: the criterion and the estimates ([`CrossedModel`]).
+//!    the log-determinant, solves and entries of `A^-1` that are read from it.
+//! 3. `model.rs`: the criterion, its slope and the estimates ([`CrossedModel`]).
 //!
 //! `error.rs` defines the errors and `testing.rs` has helpers for the tests. The Python
 //! bindings are a separate, small crate: `src-rust/lib.rs`, at the top of the repository.

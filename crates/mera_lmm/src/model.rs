@@ -237,6 +237,9 @@ impl CrossedModel {
     /// criterion by less than a part in ten thousand million, and `theta = 0` itself is
     /// still reported exactly by the caller.
     pub fn deviance_and_gradient(&mut self, theta: &[f64]) -> Result<(f64, Vec<f64>), LmmError> {
+        // theta is checked here, before the floor is applied: taking the larger of a
+        // negative or not-a-number theta and the floor would turn it into the floor,
+        // and the check inside `profile` would then have nothing to object to.
         self.check_theta(theta)?;
         // Any theta below THETA_FLOOR is replaced by it, as explained above. (The new
         // list takes the name `theta` from here on.)
@@ -380,8 +383,8 @@ impl CrossedModel {
     }
 
     /// Evaluates the model at `theta`: the criterion, and the pieces of it that
-    /// [`CrossedModel::fit_at`] reuses. The module documentation at the top of this file
-    /// gives the formulas.
+    /// [`CrossedModel::deviance_and_gradient`] and [`CrossedModel::fit_at`] reuse. The
+    /// module documentation at the top of this file gives the formulas.
     fn profile(&mut self, theta: &[f64]) -> Result<Profile, LmmError> {
         self.check_theta(theta)?;
         // ---- A at this theta, its Cholesky factor and log|A| ----
@@ -453,14 +456,9 @@ mod tests {
     fn supernodal_layout_gives_the_same_fits() {
         // Fits use the supernodal layout, and faer falls back on the simplicial one when
         // L is diagonal. The fits, conditional SDs included, must not depend on which.
-        let mut rng = Lcg::new(7);
-        let n = 300;
-        let events = (0..n).map(|_| rng.below(40)).collect();
-        let sites = (0..n).map(|_| rng.below(25)).collect();
-        let y: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
-        let design = Design::from_full_codes(&[events, sites], &y, &vec![1.0; n], 1).unwrap();
+        // the same data in both layouts: `random_model` always makes the same design
         let mut models = [FactorKind::Simplicial, FactorKind::Supernodal]
-            .map(|kind| CrossedModel::with_factor_kind(design.clone(), true, kind).unwrap());
+            .map(|kind| random_model(1, true, kind));
         assert!(models[0].factor.is_simplicial() && !models[1].factor.is_simplicial());
         for theta in [[0.8, 1.3], [0.2, 0.6]] {
             let [expected, fit] = models.each_mut().map(|m| m.fit_at(&theta).unwrap());

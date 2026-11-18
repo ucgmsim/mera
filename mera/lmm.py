@@ -65,17 +65,24 @@ GRADIENT_SEARCH_FTOL = 1e-9
 # be zero if it kept changing at its present rate. It measures that rate by shifting
 # each omega by NEWTON_DIFFERENCE. The search has arrived when the jump is shorter than
 # NEWTON_DONE. A jump longer than NEWTON_MAX_JUMP, or no arrival within NEWTON_MAX_STEPS
-# jumps, means that stage 1 stopped too far from the optimum for this to work.
+# jumps, means that stage 1 stopped too far from the optimum for this to work. After a
+# jump shorter than NEWTON_SAME_HESSIAN the rate is not measured again, because over so
+# short a distance it cannot have changed by more than about a part in a thousand.
 NEWTON_DIFFERENCE = 1e-5
 NEWTON_DONE = 1e-6
 NEWTON_MAX_JUMP = 0.1
 NEWTON_MAX_STEPS = 3
+NEWTON_SAME_HESSIAN = 1e-3
 # Stage 3 is used only if stage 2 cannot confirm the optimum: a search that compares
 # values of the criterion and needs no slope (scipy's COBYQA), from where the others
 # stopped. It starts with steps of FALLBACK_TR_RADIUS, shortens them as it closes in,
 # and stops once they are shorter than FINAL_TR_RADIUS.
 FALLBACK_TR_RADIUS = 0.1
 FINAL_TR_RADIUS = 1e-8
+# An omega below this is reported as exactly zero, a singular fit. Near zero, omega is
+# theta^2, so this is a theta below 1e-4, which is where lme4 draws the same line.
+# (FINAL_TR_RADIUS must not be larger, or stage 3 could not tell the two apart.)
+SINGULAR_OMEGA = 1e-8
 # The search gives up, and fit_lmm warns, after this many evaluations of the criterion.
 # A fit normally takes about 10.
 MAX_EVALUATIONS = 1000
@@ -467,9 +474,9 @@ def fit_lmm(
                 "too little residual variation to fit the model (synthetic data made "
                 "without noise does this)"
             )
-        # An omega below the resolution of the search is zero: a theta below 1e-4 is not
-        # told apart from none (lme4 draws the same line for a singular fit).
-        theta = _theta_from(np.where(omega < FINAL_TR_RADIUS, 0.0, omega))
+        # An omega below SINGULAR_OMEGA is zero: a theta below 1e-4 is not told apart
+        # from none (lme4 draws the same line for a singular fit).
+        theta = _theta_from(np.where(omega < SINGULAR_OMEGA, 0.0, omega))
         if failure is not None:
             subject = f" for {name}" if name is not None else ""
             warnings.warn(
@@ -669,9 +676,6 @@ def _search(
         Why the search stopped without converging, None if it converged.
     """
     n_evals = 0
-    bounds = [(0.0, omega_max)] * omega_start.size
-    # the latest omega at which the gradient was evaluated, and that gradient
-    latest: tuple[np.ndarray, np.ndarray] | None = None
 
     def value_and_gradient(omega: np.ndarray) -> tuple[float, np.ndarray]:
         """The criterion at omega and its slope in each omega.
@@ -688,14 +692,12 @@ def _search(
         gradient : np.ndarray
             Its derivative with respect to each omega.
         """
-        nonlocal n_evals, latest
+        nonlocal n_evals
         n_evals += 1
         value, gradient = model.deviance_and_gradient(_theta_from(omega).tolist())
         # The engine's gradient is with respect to theta^2 = exp(omega) - 1, which
         # changes exp(omega) times as fast as omega.
-        gradient = np.exp(omega) * gradient
-        latest = (omega.copy(), gradient)
-        return value, gradient
+        return value, np.exp(omega) * gradient
 
     # How much each omega is stretched for stage 1: see there.
     stretch = np.sqrt(np.asarray(n_levels, dtype=float))
@@ -759,15 +761,21 @@ def _search(
     )
     # (clip: dividing by the stretch can leave an omega one rounding step past a bound)
     omega = np.clip(result.x / stretch, 0.0, omega_max)
-    if n_evals >= MAX_EVALUATIONS:
+    # scipy's status 1 says that the search was stopped by the limit on evaluations.
+    if result.status == 1:
         return omega, n_evals, "the maximum number of evaluations was reached"
+    # The slope where stage 1 ended, which L-BFGS-B returns: back in terms of omega.
+    gradient = result.jac * stretch
 
     # ---- Stage 2: Newton's method ----
-    for _ in range(NEWTON_MAX_STEPS):
-        # The gradient at omega is usually the latest that was evaluated.
-        if latest is not None and np.array_equal(latest[0], omega):
-            gradient = latest[1]
-        else:
+    # The Hessian (see below), the omegas that were free when it was measured, and the
+    # length of the jump made since then. Nothing has been measured yet.
+    hessian = np.empty((0, 0))
+    measured_free = np.empty(0, dtype=np.intp)
+    length = np.inf
+    for step in range(NEWTON_MAX_STEPS):
+        # After a jump, the slope at the new omega is needed.
+        if step > 0:
             _, gradient = value_and_gradient(omega)
         # An omega on a bound stays there if the criterion rises away from the bound.
         # That is the case of a singular fit: omega = 0 with a positive slope.
@@ -779,15 +787,20 @@ def _search(
             # every omega is held on a bound, so there is nowhere better to go
             return omega, n_evals, None
         # The Hessian: how fast each slope changes with each of the free omegas, from
-        # the change of the gradient when one omega is shifted a little.
-        hessian = np.empty((free.size, free.size))
-        for column, j in enumerate(free):
-            shifted = omega.copy()
-            shifted[j] += NEWTON_DIFFERENCE
-            hessian[:, column] = (
-                value_and_gradient(shifted)[1][free] - gradient[free]
-            ) / NEWTON_DIFFERENCE
-        hessian = (hessian + hessian.T) / 2  # it is symmetric, but for rounding
+        # the change of the gradient when one omega is shifted a little. That takes an
+        # evaluation per free omega, so the one measured before the last jump is kept
+        # if that jump was short and the same omegas are free.
+        same_free = np.array_equal(free, measured_free)
+        if length > NEWTON_SAME_HESSIAN or not same_free:
+            hessian = np.empty((free.size, free.size))
+            for column, j in enumerate(free):
+                shifted = omega.copy()
+                shifted[j] += NEWTON_DIFFERENCE
+                hessian[:, column] = (
+                    value_and_gradient(shifted)[1][free] - gradient[free]
+                ) / NEWTON_DIFFERENCE
+            hessian = (hessian + hessian.T) / 2  # it is symmetric, but for rounding
+            measured_free = free
         # At a minimum the criterion curves upwards in every direction, which makes the
         # Hessian positive definite: the Cholesky factorisation fails if it is not.
         try:
@@ -797,15 +810,14 @@ def _search(
         # The jump that would bring every free slope to zero.
         jump = -np.linalg.solve(hessian, gradient[free])
         landing = omega[free] + jump
+        length = np.abs(jump).max()  # the largest change of any omega
         # A long jump, or one that would leave the bounds, is not trusted: the Hessian
         # only describes the criterion close to where it was measured.
-        too_far = np.abs(jump).max() > NEWTON_MAX_JUMP
-        if too_far or np.any(landing < 0.0) or np.any(landing > omega_max):
+        if length > NEWTON_MAX_JUMP or np.any((landing < 0.0) | (landing > omega_max)):
             break
-        omega = omega.copy()
         omega[free] = landing
         # A jump this short means that the search had already arrived.
-        if np.abs(jump).max() <= NEWTON_DONE:
+        if length <= NEWTON_DONE:
             return omega, n_evals, None
 
     # ---- Stage 3: without the slope, from where the search stands ----
@@ -814,7 +826,7 @@ def _search(
         value,
         omega,
         method="COBYQA",
-        bounds=bounds,
+        bounds=[(0.0, omega_max)] * omega.size,
         options={
             "initial_tr_radius": FALLBACK_TR_RADIUS,
             "final_tr_radius": FINAL_TR_RADIUS,

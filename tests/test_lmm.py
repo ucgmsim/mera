@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
@@ -127,16 +128,17 @@ def test_matches_anova_on_a_balanced_design(sd_event: float, sd_site: float) -> 
     residual. Optimising theta^2, it stopped 1.5% short at a ratio of 300, and still
     reported convergence.
 
-    The tolerance allows for the rounding error of the criterion, which grows with the
-    ratio: the fits are within 5e-5 of the ANOVA estimates here.
+    The fits are within 1e-9 of the ANOVA estimates here. A search that only compared
+    values of the criterion came within 5e-5: the rounding error of the criterion, which
+    grows with the ratio, hid the rest from it.
     """
     n_events, n_sites = 30, 12
     y, events, sites = balanced_design(n_events, n_sites, sd_event, sd_site)
     theta, sigma = anova_estimates(y, n_events, n_sites)
     fit = fit_lmm(y, [events, sites])
     assert fit.converged
-    np.testing.assert_allclose(fit.theta, theta, rtol=1e-3)
-    assert fit.sigma == pytest.approx(sigma, rel=1e-4)
+    np.testing.assert_allclose(fit.theta, theta, rtol=1e-7)
+    assert fit.sigma == pytest.approx(sigma, rel=1e-7)
 
 
 @pytest.mark.parametrize("offset", [1e4, 1e6])
@@ -308,7 +310,7 @@ def test_rejects_invalid_covariates() -> None:
     assert fit_lmm(y, groups, covariates=indicators, intercept=False).beta.shape == (3,)
 
 
-def test_a_start_near_the_optimum_saves_evaluations(
+def test_a_start_at_the_optimum_saves_evaluations(
     example_residuals: pd.DataFrame,
 ) -> None:
     """A search that starts from the theta of an earlier fit of the same data ends at
@@ -512,16 +514,14 @@ def test_beta_cov_is_the_covariance_of_the_fixed_effects() -> None:
 
 def test_the_search_uses_the_gradient_and_needs_few_evaluations(
     example_residuals: pd.DataFrame,
-    lme4_fits: dict[tuple[str, bool, bool], Lme4Fit],
 ) -> None:
     """The search follows the slope of the criterion, which takes far fewer
     evaluations than a search that only compares values of it (9 against about 50
-    here)."""
+    here). test_matches_lme4 checks where this fit ends."""
     y, groups = fit_inputs(example_residuals, "PGA", True)
     fit = fit_lmm(y, groups)
     assert fit.converged
     assert fit.n_evals <= 15
-    assert_matches_lme4(fit, lme4_fits["PGA", True, True], groups)
 
 
 @pytest.mark.parametrize(
@@ -552,6 +552,45 @@ def test_the_search_without_derivatives_finishes_what_the_gradient_search_cannot
     assert_matches_lme4(fallback, lme4_fits[data, True, True], groups)
     # where the fit is singular, both report exactly zero
     np.testing.assert_array_equal(fallback.theta == 0.0, usual.theta == 0.0)
+
+
+def test_confirming_a_short_jump_takes_one_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a short Newton jump the Hessian is not measured again, because it cannot
+    have changed: one evaluation of the slope at the new point confirms the optimum.
+
+    The criterion here is a smooth bowl with its minimum at ``best``, and the first
+    stage is replaced by one that stops a ten-thousandth away from it, so that the
+    evaluations of the second stage can be counted: one where the first stage stops, two
+    for the Hessian, and one after the jump.
+    """
+    best = np.array([0.6, 1.1])
+    steepness = np.array([3.0, 5.0])
+
+    class Bowl:
+        """Stands in for the engine's model: sum of steepness * (cosh(omega - best) - 1)."""
+
+        def deviance_and_gradient(self, theta: list[float]) -> tuple[float, np.ndarray]:
+            omega = np.log1p(np.square(theta))
+            value = float(np.sum(steepness * (np.cosh(omega - best) - 1.0)))
+            slope_in_omega = steepness * np.sinh(omega - best)
+            # the engine's gradient is with respect to theta squared
+            return value, slope_in_omega / np.exp(omega)
+
+    def stops_nearby(fun: Any, x0: np.ndarray, **options: Any) -> SimpleNamespace:
+        """In place of scipy's minimize: evaluates once near the optimum and stops."""
+        stretch = x0 / np.log(2.0)  # the search starts every omega at log(2)
+        x = (best + 1e-4) * stretch
+        _, slope = fun(x)
+        return SimpleNamespace(x=x, jac=slope, status=0)
+
+    monkeypatch.setattr("mera.lmm.minimize", stops_nearby)
+    start = np.full(2, np.log(2.0))
+    omega, n_evals, failure = _search(cast("Any", Bowl()), start, 10.0, [30, 12])
+    assert failure is None
+    np.testing.assert_allclose(omega, best, atol=1e-9)
+    assert n_evals == 4
 
 
 def test_the_search_does_not_jump_where_the_criterion_does_not_curve_upwards() -> None:

@@ -99,8 +99,10 @@ class CrossedModel:
         The derivative says how fast the criterion changes as each ``theta_k ** 2``
         grows, which tells an optimiser which way is downhill. It is taken with respect
         to the square because the slope with respect to ``theta_k`` itself is always
-        zero at ``theta_k = 0``. Where a theta is below 1e-7, both results are those at
-        1e-7, which differ from the exact ones by less than rounding matters.
+        zero at ``theta_k = 0``. Where a theta is below the engine's floor
+        (``THETA_FLOOR`` in ``crates/mera_lmm/src/model.rs``, a ten-millionth), both
+        results are those at the floor, which differ from the exact ones by less than
+        rounding matters.
         """
 
     def fit_at(self, theta: Sequence[float]) -> FitAt:

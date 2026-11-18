@@ -78,6 +78,7 @@
 //! `col_ptr[c + 1]`. Column 0 owns entries 0, 1 and 2: the values 2, 1, 1 in rows 0, 3, 4.
 
 use crate::LmmError;
+use crate::error::invalid;
 
 /// The design of a model with `K` crossed random-intercept factors and `p` fixed effects:
 /// everything about the data that the fit needs.
@@ -291,11 +292,6 @@ impl Design {
             }
         }
     }
-}
-
-/// Shorthand for an [`LmmError::InvalidInput`] with this message.
-fn invalid(message: impl Into<String>) -> LmmError {
-    LmmError::InvalidInput(message.into())
 }
 
 #[cfg(test)]

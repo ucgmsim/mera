@@ -16,3 +16,8 @@ pub enum LmmError {
     #[error("Cholesky factorisation failed: {0}")]
     Factorisation(String),
 }
+
+/// Shorthand for an [`LmmError::InvalidInput`] with this message.
+pub(crate) fn invalid(message: impl Into<String>) -> LmmError {
+    LmmError::InvalidInput(message.into())
+}

@@ -102,6 +102,7 @@ use faer::{Col, Mat, MatRef, Side};
 
 use crate::LmmError;
 use crate::design::Design;
+use crate::error::invalid;
 use crate::factor::{Factor, FactorKind, dense_log_det};
 
 /// `ln(2 pi)`.
@@ -235,14 +236,14 @@ impl CrossedModel {
     /// gives the formulas.
     fn profile(&mut self, theta: &[f64]) -> Result<Profile, LmmError> {
         if theta.len() != self.design.n_factors() {
-            return Err(LmmError::InvalidInput(format!(
+            return Err(invalid(format!(
                 "theta has {} values but the model has {} grouping factors",
                 theta.len(),
                 self.design.n_factors()
             )));
         }
         if theta.iter().any(|t| !t.is_finite() || *t < 0.0) {
-            return Err(LmmError::InvalidInput(format!(
+            return Err(invalid(format!(
                 "theta must be finite and non-negative, got {theta:?}"
             )));
         }
@@ -285,10 +286,9 @@ impl CrossedModel {
         // A (numerically) zero penalised residual sum of squares leaves nothing to
         // estimate sigma from, and its logarithm below would be minus infinity.
         if r2.is_nan() || r2 <= 64.0 * f64::EPSILON * m[(0, 0)].abs() {
-            return Err(LmmError::InvalidInput(
+            return Err(invalid(
                 "the residual sum of squares is zero: either the response is constant, or \
-                 the fixed effects and grouping factors explain it exactly"
-                    .into(),
+                 the fixed effects and grouping factors explain it exactly",
             ));
         }
         let dof = self.degrees_of_freedom();
